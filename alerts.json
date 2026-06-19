@@ -1,0 +1,18 @@
+[
+  {"_key": "ALR-001", "service": "onboarding-api", "severity": "P1", "region": "us-east-1",
+   "text": "Merchants unable to e-sign the Merchant Agreement; onboarding stuck at the document step with a permission error in the UI."},
+  {"_key": "ALR-002", "service": "payment-gateway", "severity": "P1", "region": "eu-west-1",
+   "text": "Card declines spiking above 6% and processor timeouts; settlement reconciliation falling behind."},
+  {"_key": "ALR-003", "service": "auth-service", "severity": "P2", "region": "us-east-1",
+   "text": "Login latency above the 1s SLO and intermittent session-refresh failures on mobile clients."},
+  {"_key": "ALR-004", "service": "network-gateway", "severity": "P1", "region": "us-west-2",
+   "text": "Multiple services reporting outbound timeouts to external endpoints; egress saturation near the ceiling."},
+  {"_key": "ALR-005", "service": "user-db", "severity": "P1", "region": "us-east-1",
+   "text": "Read-replica lag climbing after a failover; auth and merchant reads returning stale data and timeouts."},
+  {"_key": "ALR-006", "service": "document-service", "severity": "P2", "region": "eu-west-1",
+   "text": "E-sign envelope generation latency above 2s and 502s; PDF render workers saturated."},
+  {"_key": "ALR-007", "service": "merchant-service", "severity": "P3", "region": "ap-southeast-1",
+   "text": "Merchant records displaying stale fields in the onboarding UI after a config update."},
+  {"_key": "ALR-008", "service": "api-gateway", "severity": "P1", "region": "us-east-1",
+   "text": "Elevated 5xx to web clients concentrated on routes to onboarding-api and auth-service."}
+]

@@ -1,0 +1,44 @@
+{
+  "services": {
+    "web-portal":          {"name": "Web Portal",          "team": "frontend"},
+    "api-gateway":         {"name": "API Gateway",         "team": "frontend"},
+    "onboarding-api":      {"name": "Onboarding API",      "team": "onboarding"},
+    "merchant-service":    {"name": "Merchant Service",    "team": "onboarding"},
+    "document-service":    {"name": "Document Service",    "team": "onboarding"},
+    "auth-service":        {"name": "Auth Service",        "team": "identity"},
+    "payment-gateway":     {"name": "Payment Gateway",     "team": "payments"},
+    "notification-service":{"name": "Notification Service","team": "platform"},
+    "network-gateway":     {"name": "Network Gateway",     "team": "platform"},
+    "host-infra":          {"name": "Host Infrastructure", "team": "platform"},
+    "user-db":             {"name": "User DB",             "team": "identity"},
+    "merchant-db":         {"name": "Merchant DB",         "team": "payments"}
+  },
+  "depends_on": [
+    ["web-portal", "api-gateway"],
+    ["api-gateway", "onboarding-api"],
+    ["api-gateway", "auth-service"],
+    ["onboarding-api", "merchant-service"],
+    ["onboarding-api", "document-service"],
+    ["onboarding-api", "notification-service"],
+    ["merchant-service", "merchant-db"],
+    ["merchant-service", "payment-gateway"],
+    ["merchant-service", "user-db"],
+    ["document-service", "merchant-db"],
+    ["auth-service", "user-db"],
+    ["payment-gateway", "network-gateway"],
+    ["notification-service", "network-gateway"]
+  ],
+  "teams": {
+    "frontend":  {"name": "Frontend On-Call",  "oncall": "frontend-oncall@example.com"},
+    "onboarding":{"name": "Onboarding On-Call", "oncall": "onboarding-oncall@example.com"},
+    "identity":  {"name": "Identity On-Call",   "oncall": "identity-oncall@example.com"},
+    "payments":  {"name": "Payments On-Call",   "oncall": "payments-oncall@example.com"},
+    "platform":  {"name": "Platform On-Call",   "oncall": "platform-oncall@example.com"}
+  },
+  "category_to_service": {
+    "Software": "onboarding-api",
+    "Access":   "auth-service",
+    "Network":  "network-gateway",
+    "Hardware": "host-infra"
+  }
+}

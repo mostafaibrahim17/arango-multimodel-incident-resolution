@@ -1,0 +1,6 @@
+{
+  "service": "onboarding-api",
+  "severity": "P1",
+  "region": "us-east-1",
+  "text": "Merchants unable to e-sign the Merchant Agreement; onboarding stuck at the document step with a permission error in the UI."
+}

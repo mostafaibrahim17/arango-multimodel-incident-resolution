@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+# Local-only run log (executed commands + captured outputs for tutorial writing); not shipped in the repo
+runlog/
