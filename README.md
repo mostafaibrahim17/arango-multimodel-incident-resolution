@@ -29,7 +29,7 @@ database, no stitched-together pipeline.
 - [Status](#status)
 
 ## What one alert returns
-`python resolver.py data/alert.sample.json` on a P1 `onboarding-api` alert returns a single JSON payload:
+`python src/resolver.py data/alert.sample.json` on a P1 `onboarding-api` alert returns a single JSON payload:
 
 - **`structured`** (one AQL round trip):
   - `similar_incidents`: 3 ranked past incidents with their resolutions (vector, [`APPROX_NEAR_COSINE`](https://docs.arango.ai/arangodb/stable/aql/functions/vector/))
@@ -99,11 +99,11 @@ cp .env.example .env   # fill in ARANGO_* + OPENAI_API_KEY + GRAPHRAG_PROJECT/GR
 
 ## Run
 ```bash
-python ingest.py                            # 1. multimodel core: 500 incidents + 8 alerts + topology
-python graphrag_ingest.py                   # 2. import runbooks -> knowledge graph (skip-if-built; --reset to rebuild)
-python resolver.py data/alert.sample.json   # 3. one alert -> structured payload + cited, grounded answer
+python src/ingest.py                            # 1. multimodel core: 500 incidents + 8 alerts + topology
+python src/graphrag_ingest.py                   # 2. import runbooks -> knowledge graph (skip-if-built; --reset to rebuild)
+python src/resolver.py data/alert.sample.json   # 3. one alert -> structured payload + cited, grounded answer
 # or the whole pipeline at once:
-python run_all.py
+python src/run_all.py
 ```
 The notebook `incident_resolution.ipynb` walks the same flow, importing the same functions.
 
@@ -130,12 +130,12 @@ discovered at runtime (`graphrag.py`), never hardcoded.
 
 ## Repository contents
 ```
-ingest.py              multimodel core: schema, embed tickets, build topology, store alerts
-graphrag.py            auth + service discovery + the KG runbook lookup
-graphrag_ingest.py     import runbooks into the knowledge graph + verify (skip-if-built / --reset)
-resolver.py            the marquee AQL query + the cited, grounded answer + corroboration + evaluate()
-run_all.py             the whole pipeline in one command
-viz.py                 regenerate the figures from live data (subgraph, knowledge graph, results)
+src/ingest.py          multimodel core: schema, embed tickets, build topology, store alerts
+src/graphrag.py        auth + service discovery + the KG runbook lookup
+src/graphrag_ingest.py import runbooks into the knowledge graph + verify (skip-if-built / --reset)
+src/resolver.py        the marquee AQL query + the cited, grounded answer + corroboration + evaluate()
+src/run_all.py         the whole pipeline in one command
+src/viz.py             regenerate the figures from live data (subgraph, knowledge graph, results)
 incident_resolution.ipynb   narrated, executed walkthrough of the same flow (outputs + figures)
 data/topology.json     curated service topology (12 services, 13 dependencies, 5 teams)
 data/alerts.json       8 synthetic alerts; data/alert.sample.json is the headline P1
