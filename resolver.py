@@ -6,6 +6,7 @@ key-value all in one query.
 """
 import json
 import sys
+import time
 
 import requests
 from openai import OpenAI
@@ -45,12 +46,28 @@ RETURN {
 """
 
 
+def resolve_timed(alert, db=None):
+    """resolve() plus timings: how long the alert text took to embed vs. the multimodel AQL itself.
+
+    Returns (payload, embed_ms, query_ms). query_ms is the ONE AQL round trip (vector + graph +
+    key-value) on its own -- the embedding round trip to OpenAI is timed separately so the
+    multimodel query's real latency is visible, not hidden behind the embed call.
+    """
+    db = db or connect()
+    embed_start = time.perf_counter()
+    vec = OpenAI().embeddings.create(model=EMBED_MODEL, input=[alert["text"]]).data[0].embedding
+    embed_ms = (time.perf_counter() - embed_start) * 1000
+
+    query_start = time.perf_counter()
+    payload = db.aql.execute(MARQUEE, bind_vars={"vec": vec, "service": alert.get("service")}).next()
+    query_ms = (time.perf_counter() - query_start) * 1000
+    return payload, embed_ms, query_ms
+
+
 def resolve(alert):
     """Given an alert dict ({text, service?}), return the structured resolution payload."""
-    db = connect()
-    vec = OpenAI().embeddings.create(model=EMBED_MODEL, input=[alert["text"]]).data[0].embedding
-    cursor = db.aql.execute(MARQUEE, bind_vars={"vec": vec, "service": alert.get("service")})
-    return cursor.next()
+    payload, _embed_ms, _query_ms = resolve_timed(alert)
+    return payload
 
 
 def answer(payload, alert_text=None, jwt=None):
@@ -62,40 +79,40 @@ def answer(payload, alert_text=None, jwt=None):
     lands on that service's runbook; citations are then re-ranked to surface it first.
     """
     jwt = jwt or token()
-    svc = payload["root_service"]
+    service = payload["root_service"]
     symptom = alert_text or (payload["similar_incidents"][0].get("short_description", "")
                              if payload.get("similar_incidents") else "")
-    q = (f"{svc} incident: {symptom} "
-         f"What does the {svc} runbook recommend as the resolution and the first on-call step?")
-    r = requests.post(
+    query = (f"{service} incident: {symptom} "
+             f"What does the {service} runbook recommend as the resolution and the first on-call step?")
+    response = requests.post(
         f"{retriever_url(jwt=jwt)}/graphrag-query",
         headers={"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"},
-        json={"query": q, "query_type": 2, "use_llm_planner": False,
+        json={"query": query, "query_type": 2, "use_llm_planner": False,
               "show_citations": True, "include_metadata": True, "use_cache": False},
         timeout=180,
     )
-    r.raise_for_status()
-    j = r.json()
-    meta = json.loads(j.get("metadata", "{}"))
-    related = meta.get("citation_mapping", {})
+    response.raise_for_status()
+    body = response.json()
+    metadata = json.loads(body.get("metadata", "{}"))
+    related_citations = metadata.get("citation_mapping", {})
 
     # Ground the answer in the exact runbook for the root service the AQL query pinpointed
     # (precise multimodel signal), then append GraphRAG's related blast-radius runbooks.
     citations = {}
-    n = 1
-    primary = runbook_for_service(svc)
-    seen = set()
+    index = 1
+    seen_urls = set()
+    primary = runbook_for_service(service)
     if primary:
-        citations[str(n)] = {"citable_url": primary["citable_url"],
-                             "file_name": primary["file_name"], "primary": True}
-        seen.add(primary["citable_url"])
-        n += 1
-    for v in related.values():
-        if v.get("citable_url") not in seen:
-            citations[str(n)] = v
-            seen.add(v.get("citable_url"))
-            n += 1
-    return {"text": j.get("result", ""), "citations": citations}
+        citations[str(index)] = {"citable_url": primary["citable_url"],
+                                 "file_name": primary["file_name"], "primary": True}
+        seen_urls.add(primary["citable_url"])
+        index += 1
+    for citation in related_citations.values():
+        if citation.get("citable_url") not in seen_urls:
+            citations[str(index)] = citation
+            seen_urls.add(citation.get("citable_url"))
+            index += 1
+    return {"text": body.get("result", ""), "citations": citations}
 
 
 def corroborated(payload, cited):
@@ -104,15 +121,64 @@ def corroborated(payload, cited):
     The structured payload (AQL) and the cited answer (GraphRAG) are produced by two separate
     surfaces; this checks they converge on the same incident.
     """
-    services = {payload["root_service"], *(a["service"] for a in payload.get("affected_services", []))}
-    blob = " ".join(f'{c.get("content", "")} {c.get("citable_url", "")}'
-                    for c in cited.get("citations", {}).values()).lower()
-    matched = sorted(s for s in services if s.lower() in blob)
+    services = {payload["root_service"], *(svc["service"] for svc in payload.get("affected_services", []))}
+    cited_text = " ".join(f'{citation.get("content", "")} {citation.get("citable_url", "")}'
+                          for citation in cited.get("citations", {}).values()).lower()
+    matched = sorted(service for service in services if service.lower() in cited_text)
     return {"agree": bool(matched), "matched_services": matched}
 
 
+def _first_sentence(text):
+    """A short, plain-text snippet of the cited answer (drop markdown headings/bullets)."""
+    for line in text.splitlines():
+        clean = line.lstrip("#*-> ").strip()
+        if len(clean) > 30:
+            return clean[:160]
+    return text.strip()[:160]
+
+
+def evaluate(alerts, jwt=None):
+    """Run every alert end to end and return one result row per alert.
+
+    Each row carries what the system actually delivered (most similar incident, blast radius,
+    on-call owner, the runbook it grounded on, the next step) plus the two timings: the
+    multimodel query (one AQL round trip) and the cited GraphRAG answer. Feeds the results
+    table and the results figure -- the final showcase.
+    """
+    jwt = jwt or token()
+    db = connect()
+    rows = []
+    for alert in alerts:
+        payload, embed_ms, query_ms = resolve_timed(alert, db=db)
+
+        answer_start = time.perf_counter()
+        cited = answer(payload, alert.get("text"), jwt=jwt)
+        answer_seconds = time.perf_counter() - answer_start
+
+        primary = next((c for c in cited["citations"].values() if c.get("primary")), None)
+        top_similar = payload["similar_incidents"][0] if payload["similar_incidents"] else None
+        rows.append({
+            "alert": alert["_key"],
+            "service": alert["service"],
+            "severity": alert["severity"],
+            "top_similar_incident": top_similar["number"] if top_similar else None,
+            "top_similarity": round(top_similar["similarity"], 3) if top_similar else None,
+            "blast_radius": len(payload["affected_services"]),
+            "on_call": payload["on_call"]["team"],
+            "primary_runbook": primary["file_name"] if primary else None,
+            "grounded": primary is not None,
+            "corroborated": corroborated(payload, cited)["agree"],
+            "citations": len(cited["citations"]),
+            "query_ms": round(query_ms, 1),
+            "embed_ms": round(embed_ms, 1),
+            "answer_s": round(answer_seconds, 1),
+            "next_step": _first_sentence(cited["text"]),
+        })
+    return rows
+
+
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else "alert.sample.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "data/alert.sample.json"
     alert = json.load(open(path))
     payload = resolve(alert)
     cited = answer(payload, alert.get("text"))

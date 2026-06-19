@@ -4,3 +4,5 @@ __pycache__/
 .ipynb_checkpoints/
 # Local-only run log (executed commands + captured outputs for tutorial writing); not shipped in the repo
 runlog/
+# Superseded cleared notebook copy — one executed notebook ships; kept locally, excluded from the repo
+incident_resolution.colab.ipynb

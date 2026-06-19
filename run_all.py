@@ -22,7 +22,7 @@ def main():
     graphrag_ingest.main()  # skip-if-built; pass --reset to rebuild
 
     print("\n== 3. Combined resolution ==")
-    path = sys.argv[1] if len(sys.argv) > 1 else "alert.sample.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "data/alert.sample.json"
     alert = json.load(open(path))
     payload = resolve(alert)
     cited = answer(payload, alert.get("text"))

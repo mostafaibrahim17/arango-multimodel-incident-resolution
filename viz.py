@@ -27,7 +27,9 @@ def _box(ax, x, y, w, h, text, fc, fs=10, tc="white"):
 
 def fig_architecture():
     fig, ax = plt.subplots(figsize=(11, 5.2))
-    ax.set_xlim(0, 11); ax.set_ylim(0, 5.2); ax.axis("off")
+    ax.set_xlim(0, 11)
+    ax.set_ylim(0, 5.2)
+    ax.axis("off")
     _box(ax, 0.2, 2.1, 1.6, 1.0, "Live alert\n(JSON)", AMBER, 10)
     _box(ax, 2.3, 0.3, 4.4, 4.6, "Arango Contextual Data Platform", NAVY, 12, "white")
     _box(ax, 2.6, 2.7, 3.8, 1.8, "Multimodel core  (incident_demo)\n\nincidents + vector index\nservice topology (graph)\nteams (key-value) + alerts", TEAL, 9)
@@ -40,15 +42,17 @@ def fig_architecture():
         ax.annotate("", xy=(x1, y1), xytext=(x0, y0), arrowprops=dict(arrowstyle="-|>", color="#888", lw=1.6))
     ax.text(5.5, 4.95, "one alert in -> one AQL round trip (vector + graph + key-value) + grounded, cited answer",
             ha="center", fontsize=9, style="italic", color="#555")
-    plt.tight_layout(); plt.savefig("assets/architecture-schematic.png", dpi=130, bbox_inches="tight"); plt.close()
+    plt.tight_layout()
+    plt.savefig("assets/architecture-schematic.png", dpi=130, bbox_inches="tight")
+    plt.close()
     print("wrote assets/architecture-schematic.png")
 
 
-def fig_affected_subgraph(alert_path="alert.sample.json"):
+def fig_affected_subgraph(alert_path="data/alert.sample.json"):
     from resolver import resolve
     payload = resolve(json.load(open(alert_path)))
     affected = {a["service"]: a for a in payload["affected_services"]}
-    topo = json.load(open("topology.json"))
+    topo = json.load(open("data/topology.json"))
     names = {k: v["name"] for k, v in topo["services"].items()}
     G = nx.DiGraph()
     for a in affected:
@@ -65,7 +69,10 @@ def fig_affected_subgraph(alert_path="alert.sample.json"):
     nx.draw_networkx_labels(G, pos, {n: names.get(n, n) for n in G.nodes}, font_size=8)
     plt.title(f"Affected-service subgraph for an alert on {payload['root_service']}  "
               f"(root in red, by blast-radius depth)", fontsize=11)
-    plt.axis("off"); plt.tight_layout(); plt.savefig("assets/affected-subgraph.png", dpi=130, bbox_inches="tight"); plt.close()
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig("assets/affected-subgraph.png", dpi=130, bbox_inches="tight")
+    plt.close()
     print("wrote assets/affected-subgraph.png")
 
 
@@ -120,12 +127,50 @@ def fig_kg_sample():
     plt.title(f"GraphRAG knowledge graph — {len([n for n in G.nodes if not is_doc[n]])} entities extracted "
               f"from {len(docs)} runbooks (navy = runbook hub, red = entity shared across runbooks, "
               f"amber dashed = RELATED_TO)", fontsize=10)
-    plt.axis("off"); plt.tight_layout(); plt.savefig("assets/knowledge-graph.png", dpi=130, bbox_inches="tight"); plt.close()
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig("assets/knowledge-graph.png", dpi=130, bbox_inches="tight")
+    plt.close()
     print(f"wrote assets/knowledge-graph.png ({len(G.nodes)} nodes: {len(docs)} runbooks + "
           f"{len([n for n in G.nodes if not is_doc[n]])} entities, {len(bridge)} shared)")
+
+
+def fig_results_from_rows(rows):
+    """The results showcase: one bar per alert (multimodel-query latency), colored by whether it
+    grounded on the correct runbook, titled with the grounded/corroborated tally. Precomputed rows
+    so the notebook can evaluate once and reuse them here. -> assets/results.png"""
+    labels = [f"{r['alert']}  ·  {r['service']}" for r in rows]
+    query_ms = [r["query_ms"] for r in rows]
+    bar_colors = [GREEN if r["grounded"] else "#d94e3a" for r in rows]
+    grounded = sum(r["grounded"] for r in rows)
+    corroborated_count = sum(r["corroborated"] for r in rows)
+    total = len(rows)
+    positions = list(range(total))
+
+    plt.figure(figsize=(10, 5.5))
+    plt.barh(positions, query_ms, color=bar_colors, edgecolor="white")
+    plt.yticks(positions, labels, fontsize=8)
+    plt.gca().invert_yaxis()
+    plt.xlabel("multimodel query — structured payload, one AQL round trip (ms)")
+    for position, ms in zip(positions, query_ms):
+        plt.text(ms + max(query_ms) * 0.01, position, f"{ms:.0f} ms", va="center", fontsize=7, color="#555")
+    plt.title(f"{grounded}/{total} grounded on the correct runbook   ·   "
+              f"{corroborated_count}/{total} corroborated   ·   "
+              f"vector + graph + key-value in one round trip", fontsize=11)
+    plt.tight_layout()
+    plt.savefig("assets/results.png", dpi=130, bbox_inches="tight")
+    plt.close()
+    print(f"wrote assets/results.png ({grounded}/{total} grounded, {corroborated_count}/{total} corroborated)")
+
+
+def fig_results(alerts_path="data/alerts.json"):
+    """Standalone: evaluate every alert against the live deployment, then render the figure."""
+    from resolver import evaluate
+    fig_results_from_rows(evaluate(json.load(open(alerts_path))))
 
 
 if __name__ == "__main__":
     fig_architecture()
     fig_affected_subgraph()
     fig_kg_sample()
+    fig_results()

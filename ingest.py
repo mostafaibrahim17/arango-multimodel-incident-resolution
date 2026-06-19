@@ -43,7 +43,7 @@ def embed(client, texts, batch=100):
 
 def main():
     db = connect()
-    topo = json.load(open("topology.json"))
+    topo = json.load(open("data/topology.json"))
 
     # Schema: drop + recreate so the script is idempotent.
     if db.has_graph("service_topology"):
@@ -105,7 +105,7 @@ def main():
     )
 
     # Alerts: the third data shape -- live alerts, stored + embedded so they are queryable too.
-    alert_docs = json.load(open("alerts.json"))
+    alert_docs = json.load(open("data/alerts.json"))
     alert_vecs = embed(oai, [a["text"] for a in alert_docs])
     alerts.insert_many([{**a, "embedding": v} for a, v in zip(alert_docs, alert_vecs)])
     alerts.add_index(

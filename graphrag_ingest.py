@@ -71,10 +71,10 @@ def _poll(base, job, jwt):
 
 
 def import_runbooks(retry=1):
-    """Import every runbooks/**/*.md into the KG (one full_graphrag job). Retries a transient fail."""
+    """Import every data/runbooks/**/*.md into the KG (one full_graphrag job). Retries a transient fail."""
     jwt = token()
     base = importer_url(jwt=jwt)
-    files = sorted(glob.glob("runbooks/**/*.md", recursive=True))
+    files = sorted(glob.glob("data/runbooks/**/*.md", recursive=True))
     payload = {
         "files": [
             {"name": os.path.basename(f),
