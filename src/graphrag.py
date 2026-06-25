@@ -16,7 +16,7 @@ HOST = os.environ["ARANGO_HOST"].rstrip("/")  # gateway base, e.g. https://your-
 USER = os.environ["ARANGO_USER"]
 PWD = os.environ["ARANGO_PASSWORD"]
 GRAPHRAG_DB = os.environ.get("GRAPHRAG_DB", "incident_demo")
-GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "incident-runbook-autograph")
+GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "incidents-runbook-autograph")
 
 
 def kg_db():

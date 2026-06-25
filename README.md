@@ -50,9 +50,9 @@ Two surfaces over one platform, joined by the agent:
    topology (named graph), on-call teams, and stored alerts. One AQL query does vector, graph, and
    key-value in a single round trip, with no application-side joins.
 2. **[AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) knowledge graph** (project
-   `incident-runbook-autograph`): [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/reference/)
+   `incidents-runbook-autograph`): [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/reference/)
    discovers the knowledge domains in the runbooks and builds entities, relationships, communities, and
-   chunk embeddings (197 entities, 287 relations, 4 communities from 11 runbooks), queried through the
+   chunk embeddings (105 entities, 227 relations, 5 communities from 11 runbooks), queried through the
    project's Retriever.
 
 The agent (`resolver.py`) uses the **precise** root service from the multimodel query to ground the
@@ -68,7 +68,7 @@ then the services that depend on it, by depth.
 The runbooks import into a real knowledge graph: each runbook a hub, entities clustering around it,
 with the entities that appear in more than one runbook bridging them (red).
 
-![AutoGraph knowledge graph: 197 entities extracted from 11 runbooks](assets/knowledge-graph.png)
+![AutoGraph knowledge graph: 105 entities extracted from 11 runbooks](assets/knowledge-graph.png)
 
 > Both data figures are regenerated from the live deployment by `python viz.py` (into `assets/`). The
 > headline architecture diagram is a static asset; `assets/architecture-schematic.png` is the same
@@ -128,10 +128,12 @@ The [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) control serv
 Retriever are deployed once by creating the AutoGraph project in the platform web UI (on the current
 platform version the project/service creation is UI-driven). Everything after that runs over the
 documented [AutoGraph REST API](https://docs.arango.ai/agentic-ai-suite/autograph/reference/):
-`graphrag_ingest.py` drives `import-multiple → corpus/builds → rag-strategizer → orchestrate`, AutoGraph
-discovers the domains and assigns per-domain retrieval treatment automatically, and the cited answer
-uses the Retriever's Unified Search (`query_type 3`). Service postfixes are discovered at runtime
-(`graphrag.py`), never hardcoded.
+`graphrag_ingest.py` drives `import-multiple → corpus/builds → rag-strategizer`, where AutoGraph
+discovers the domains and assigns per-domain retrieval treatment automatically. The final
+orchestration (the entity build) is one click in the UI — "Continue to Import" — because the REST
+`/orchestrate` endpoint returns zero jobs on the current platform version; everything up to it is
+scriptable. The cited answer uses the Retriever's Unified Search (`query_type 3`). Service postfixes
+are discovered at runtime (`graphrag.py`), never hardcoded.
 
 ## Repository contents
 ```
@@ -151,7 +153,7 @@ assets/                architecture diagram + the data-driven figures (subgraph,
 
 ## Status
 - Multimodel core ✅
-- AutoGraph runbook knowledge graph ✅ (11 runbooks → 197 entities, 287 relations, 4 communities; built over the AutoGraph REST API)
+- AutoGraph runbook knowledge graph ✅ (11 runbooks → 105 entities, 227 relations, 5 communities; FullGraphRAG — import/corpus/strategizer via the AutoGraph REST API, final orchestrate via the UI)
 - Cited, grounded combined resolver ✅ (Unified Search + content grounding; 8/8 demo alerts grounded and corroborated)
 
 The agent here is framework-free Python. LangChain / LangGraph and Arango's built-in **Ada**
