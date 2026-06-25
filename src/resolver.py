@@ -71,12 +71,12 @@ def resolve(alert):
 
 
 def answer(payload, alert_text=None, jwt=None):
-    """Cited next-step from the GraphRAG Retriever, grounded in the runbook knowledge graph.
+    """Cited next-step from the Retriever, grounded in the runbook knowledge graph.
 
     Uses Unified Search (query_type 3), which returns the cited answer on this platform. The
     query foregrounds the affected service and the alert's own symptom text so retrieval lands on
     that service's runbook; we then pin the exact root-service runbook (fetched from the KG by
-    content) as citation #1 and append GraphRAG's related blast-radius runbooks.
+    content) as citation #1 and append the Retriever's related blast-radius runbooks.
     """
     jwt = jwt or token()
     service = payload["root_service"]
@@ -97,7 +97,7 @@ def answer(payload, alert_text=None, jwt=None):
     related_citations = metadata.get("citation_mapping", {})
 
     # Ground the answer in the exact runbook for the root service the AQL query pinpointed
-    # (precise multimodel signal), then append GraphRAG's related blast-radius runbooks.
+    # (precise multimodel signal), then append the Retriever's related blast-radius runbooks.
     # AutoGraph citations carry no citable_url, so dedup on chunk_id / content, not URL.
     citations = {}
     index = 1
@@ -121,7 +121,7 @@ def answer(payload, alert_text=None, jwt=None):
 def corroborated(payload, cited):
     """Independent corroboration: does a cited runbook reference the root or an affected service?
 
-    The structured payload (AQL) and the cited answer (GraphRAG) are produced by two separate
+    The structured payload (AQL) and the cited answer (Retriever) are produced by two separate
     surfaces; this checks they converge on the same incident.
     """
     services = {payload["root_service"], *(svc["service"] for svc in payload.get("affected_services", []))}
@@ -145,7 +145,7 @@ def evaluate(alerts, jwt=None):
 
     Each row carries what the system actually delivered (most similar incident, blast radius,
     on-call owner, the runbook it grounded on, the next step) plus the two timings: the
-    multimodel query (one AQL round trip) and the cited GraphRAG answer. Feeds the results
+    multimodel query (one AQL round trip) and the cited Retriever answer. Feeds the results
     table and the results figure -- the final showcase.
     """
     jwt = jwt or token()

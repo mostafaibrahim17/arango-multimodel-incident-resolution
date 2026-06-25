@@ -38,7 +38,7 @@ database, no stitched-together pipeline.
 - **`cited_answer`**: a natural-language next step grounded in the runbook knowledge graph, with the
   **exact root-service runbook as the primary citation** plus the related blast-radius runbooks.
 - **`corroboration`**: an independent check that the cited runbooks fall inside the affected subgraph,
-  so the precise AQL surface and the GraphRAG surface agree.
+  so the precise AQL surface and the semantic retrieval surface agree.
 
 Across the 8 demo alerts (`data/alerts.json`), the primary citation is the correct service's runbook
 8 times out of 8, and corroboration is 8 out of 8. The full table is under [Results](#results).
@@ -84,13 +84,13 @@ The marquee query (`resolver.py:MARQUEE`), one store, one language, three moves:
 ## Results
 Every alert in `data/alerts.json`, end to end. Section 7 of the notebook runs `evaluate()` over the
 whole set and times both halves of each resolution: the multimodel query (one AQL round trip) and the
-cited GraphRAG answer.
+cited answer from the Retriever.
 
 ![Results: per-alert multimodel-query latency, 8/8 grounded on the correct runbook, 8/8 corroborated](assets/results.png)
 
 For every alert the primary citation lands on the correct service runbook (8/8), the two surfaces
 corroborate (8/8), and the multimodel query itself returns in a few milliseconds; the cited answer
-adds one GraphRAG retrieval round trip on top. The per-alert table (similar incident, blast radius,
+adds one Retriever round trip on top. The per-alert table (similar incident, blast radius,
 on-call owner, runbook, both timings) renders in the notebook.
 
 ## Setup
@@ -147,7 +147,7 @@ incident_resolution.ipynb   narrated, executed walkthrough of the same flow (out
 data/topology.json     curated service topology (12 services, 13 dependencies, 5 teams)
 data/alerts.json       8 synthetic alerts; data/alert.sample.json is the headline P1
 data/runbooks/         hand-authored runbooks (the cited knowledge-graph corpus)
-docs/                  provisioning walkthrough for the GraphRAG services
+docs/                  provisioning walkthrough for the AutoGraph services
 assets/                architecture diagram + the data-driven figures (subgraph, KG, results)
 ```
 

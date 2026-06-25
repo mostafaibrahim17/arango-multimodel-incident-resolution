@@ -2,7 +2,7 @@
 
   assets/architecture.png      -- the two-surfaces-one-platform schematic
   assets/affected-subgraph.png -- the real affected-service subgraph for the sample alert
-  assets/knowledge-graph.png   -- a sample of the GraphRAG knowledge graph (entities + relations)
+  assets/knowledge-graph.png   -- a sample of the AutoGraph knowledge graph (entities + relations)
 """
 import json
 import os
@@ -77,7 +77,7 @@ def fig_affected_subgraph(alert_path="data/alert.sample.json"):
 
 
 def fig_kg_sample():
-    """The real GraphRAG KG: entities (MENTIONED_IN chunks, PART_OF documents) clustered by
+    """The real AutoGraph KG: entities (MENTIONED_IN chunks, PART_OF documents) clustered by
     runbook, with the few direct RELATED_TO entity-entity edges overlaid. Runbooks are hubs."""
     import re
     db = kg_db()
@@ -131,7 +131,7 @@ def fig_kg_sample():
     nx.draw_networkx_labels(G, pos, {d: d.replace(".md", "") for d in docs}, font_size=7,
                             font_color="white", font_weight="bold")
     nx.draw_networkx_labels(G, pos, {n: n[:18] for n in bridge}, font_size=6, font_color="#7a2418")
-    plt.title(f"GraphRAG knowledge graph — {len([n for n in G.nodes if not is_doc[n]])} entities extracted "
+    plt.title(f"AutoGraph knowledge graph — {len([n for n in G.nodes if not is_doc[n]])} entities extracted "
               f"from {len(docs)} runbooks (navy = runbook hub, red = entity shared across runbooks, "
               f"amber dashed = RELATED_TO)", fontsize=10)
     plt.axis("off")
