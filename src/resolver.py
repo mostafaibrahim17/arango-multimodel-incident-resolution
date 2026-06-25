@@ -73,10 +73,10 @@ def resolve(alert):
 def answer(payload, alert_text=None, jwt=None):
     """Cited next-step from the GraphRAG Retriever, grounded in the runbook knowledge graph.
 
-    Uses Local Search (query_type 2 + use_llm_planner=False) -- the citation-bearing mode that
-    works on this platform (Unified/query_type 3 errors here; Deep Search disables citations).
-    The query foregrounds the affected service and the alert's own symptom text so retrieval
-    lands on that service's runbook; citations are then re-ranked to surface it first.
+    Uses Unified Search (query_type 3), which returns the cited answer on this platform. The
+    query foregrounds the affected service and the alert's own symptom text so retrieval lands on
+    that service's runbook; we then pin the exact root-service runbook (fetched from the KG by
+    content) as citation #1 and append GraphRAG's related blast-radius runbooks.
     """
     jwt = jwt or token()
     service = payload["root_service"]
@@ -87,7 +87,7 @@ def answer(payload, alert_text=None, jwt=None):
     response = requests.post(
         f"{retriever_url(jwt=jwt)}/graphrag-query",
         headers={"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"},
-        json={"query": query, "query_type": 2, "use_llm_planner": False,
+        json={"query": query, "query_type": 3,
               "show_citations": True, "include_metadata": True, "use_cache": False},
         timeout=180,
     )
@@ -98,20 +98,23 @@ def answer(payload, alert_text=None, jwt=None):
 
     # Ground the answer in the exact runbook for the root service the AQL query pinpointed
     # (precise multimodel signal), then append GraphRAG's related blast-radius runbooks.
+    # AutoGraph citations carry no citable_url, so dedup on chunk_id / content, not URL.
     citations = {}
     index = 1
-    seen_urls = set()
+    seen = set()
     primary = runbook_for_service(service)
     if primary:
-        citations[str(index)] = {"citable_url": primary["citable_url"],
-                                 "file_name": primary["file_name"], "primary": True}
-        seen_urls.add(primary["citable_url"])
+        citations[str(index)] = {"file_name": primary["file_name"],
+                                 "content": primary["content"], "primary": True}
+        seen.add(primary["file_name"])
         index += 1
     for citation in related_citations.values():
-        if citation.get("citable_url") not in seen_urls:
-            citations[str(index)] = citation
-            seen_urls.add(citation.get("citable_url"))
-            index += 1
+        key = citation.get("chunk_id") or citation.get("content", "")[:60]
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        citations[str(index)] = citation
+        index += 1
     return {"text": body.get("result", ""), "citations": citations}
 
 

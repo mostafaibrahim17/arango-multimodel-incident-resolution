@@ -33,7 +33,7 @@ def fig_architecture():
     _box(ax, 0.2, 2.1, 1.6, 1.0, "Live alert\n(JSON)", AMBER, 10)
     _box(ax, 2.3, 0.3, 4.4, 4.6, "Arango Contextual Data Platform", NAVY, 12, "white")
     _box(ax, 2.6, 2.7, 3.8, 1.8, "Multimodel core  (incident_demo)\n\nincidents + vector index\nservice topology (graph)\nteams (key-value) + alerts", TEAL, 9)
-    _box(ax, 2.6, 0.6, 3.8, 1.8, "GraphRAG knowledge graph\n(test-incident-demo)\n\nrunbooks -> entities,\nrelations, communities", GREEN, 9)
+    _box(ax, 2.6, 0.6, 3.8, 1.8, "AutoGraph knowledge graph\n(runbooks)\n\nrunbooks -> entities,\nrelations, communities", GREEN, 9)
     _box(ax, 7.2, 2.1, 1.7, 1.0, "Agent\n(resolver.py)", "#444", 10)
     _box(ax, 9.1, 3.0, 1.7, 1.6, "Structured payload\nsimilar + affected\n+ on-call", TEAL, 8)
     _box(ax, 9.1, 0.6, 1.7, 1.6, "Cited answer\ngrounded in\nrunbooks", GREEN, 8)
@@ -79,16 +79,23 @@ def fig_affected_subgraph(alert_path="data/alert.sample.json"):
 def fig_kg_sample():
     """The real GraphRAG KG: entities (MENTIONED_IN chunks, PART_OF documents) clustered by
     runbook, with the few direct RELATED_TO entity-entity edges overlaid. Runbooks are hubs."""
+    import re
     db = kg_db()
     p = GRAPHRAG_PROJECT
-    # chunk -> document (file_name), then entity -> document via MENTIONED_IN
+    # entity -> chunk (MENTIONED_IN) -> document (PART_OF). Label each document by the service in
+    # its content header (`# Runbook: <svc>`), since AutoGraph's Document.file_name can be misaligned.
     rows = list(db.aql.execute(f"""
         FOR r IN `{p}_Relations` FILTER r.type == 'MENTIONED_IN'
           LET e = DOCUMENT(r._from).entity_name
           LET doc = FIRST(FOR pr IN `{p}_Relations` FILTER pr._from == r._to AND pr.type == 'PART_OF'
-                          RETURN DOCUMENT(pr._to).file_name)
+                          RETURN DOCUMENT(pr._to).content)
           FILTER e != null AND doc != null
           RETURN {{e: e, doc: doc}}"""))
+    def _svc(content):
+        m = re.search(r'#\s*Runbook:\s*([a-z0-9-]+)', content or "")
+        return m.group(1) if m else "runbook"
+    for r in rows:
+        r["doc"] = _svc(r["doc"])
     related = [(x["f"], x["t"]) for x in db.aql.execute(f"""
         FOR r IN `{p}_Relations` FILTER r.type == 'RELATED_TO'
           RETURN {{f: DOCUMENT(r._from).entity_name, t: DOCUMENT(r._to).entity_name}}""")

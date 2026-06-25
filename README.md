@@ -8,8 +8,8 @@ database, no stitched-together pipeline.
 
 > **TL;DR.** A P1 alert on `onboarding-api` arrives. One AQL query returns 3 similar past incidents
 > (vector), the 8-service blast radius (graph), and the on-call team (key-value), in a single round
-> trip. The GraphRAG layer then grounds a natural-language fix in the exact `onboarding-api` runbook
-> plus the related runbooks across the blast radius, with clickable citations. **All 8 demo alerts
+> trip. The AutoGraph knowledge graph then grounds a natural-language fix in the exact `onboarding-api`
+> runbook plus the related runbooks across the blast radius, with inline citations. **All 8 demo alerts
 > ground on the correct runbook, and all 8 corroborate.** It's the support-engineering use case
 > Zscaler runs in production at scale (40K+ daily AI requests on the same platform); here it's
 > simulated end to end on a public dataset you can run yourself.
@@ -49,13 +49,16 @@ Two surfaces over one platform, joined by the agent:
 1. **Multimodel core** (database `incident_demo`): incidents with embeddings, a curated service
    topology (named graph), on-call teams, and stored alerts. One AQL query does vector, graph, and
    key-value in a single round trip, with no application-side joins.
-2. **[GraphRAG](https://docs.arango.ai/agentic-ai-suite/graphrag/) knowledge graph** (project
-   `test-incident-demo`): the runbooks, imported into entities, relationships, communities, and
-   chunk embeddings, queried through the GraphRAG Retriever.
+2. **[AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) knowledge graph** (project
+   `incident-runbook-autograph`): [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/reference/)
+   discovers the knowledge domains in the runbooks and builds entities, relationships, communities, and
+   chunk embeddings (197 entities, 287 relations, 4 communities from 11 runbooks), queried through the
+   project's Retriever.
 
 The agent (`resolver.py`) uses the **precise** root service from the multimodel query to ground the
-answer in that service's exact runbook, and the **semantic** GraphRAG retrieval to add the related
-runbooks across the incident's blast radius. Precise scope, grounded context.
+answer in that service's exact runbook (matched on the runbook's content), and the **semantic**
+Retriever pass (Unified Search, `query_type 3`) to add the related runbooks across the incident's blast
+radius. Precise scope, grounded context.
 
 The graph traversal returns the real blast radius of the headline alert: the root service in red,
 then the services that depend on it, by depth.
@@ -65,7 +68,7 @@ then the services that depend on it, by depth.
 The runbooks import into a real knowledge graph: each runbook a hub, entities clustering around it,
 with the entities that appear in more than one runbook bridging them (red).
 
-![GraphRAG knowledge graph: 80 entities extracted from 11 runbooks](assets/knowledge-graph.png)
+![AutoGraph knowledge graph: 197 entities extracted from 11 runbooks](assets/knowledge-graph.png)
 
 > Both data figures are regenerated from the live deployment by `python viz.py` (into `assets/`). The
 > headline architecture diagram is a static asset; `assets/architecture-schematic.png` is the same
@@ -100,7 +103,7 @@ cp .env.example .env   # fill in ARANGO_* + OPENAI_API_KEY + GRAPHRAG_PROJECT/GR
 ## Run
 ```bash
 python src/ingest.py                            # 1. multimodel core: 500 incidents + 8 alerts + topology
-python src/graphrag_ingest.py                   # 2. import runbooks -> knowledge graph (skip-if-built; --reset to rebuild)
+python src/graphrag_ingest.py                   # 2. build runbook KG with AutoGraph (skip-if-built; --reset to rebuild)
 python src/resolver.py data/alert.sample.json   # 3. one alert -> structured payload + cited, grounded answer
 # or the whole pipeline at once:
 python src/run_all.py
@@ -121,18 +124,20 @@ real corpus, [`Loukh1/IT-incidents`](https://huggingface.co/datasets/Loukh1/IT-i
 rows) is the documented scale-up path.
 
 ## Deployed services
-The GraphRAG [Importer and Retriever](https://docs.arango.ai/agentic-ai-suite/graphrag/) are deployed
-once through the platform web UI (on the current platform version the deploy is UI-driven), then
-everything else (import, knowledge-graph build, queries) is scriptable via the data-plane API.
-[AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/), which automatically discovers domains
-and assigns per-domain retrieval treatment, is shown as a web-UI walkthrough. Service IDs are
-discovered at runtime (`graphrag.py`), never hardcoded.
+The [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) control service and the project
+Retriever are deployed once by creating the AutoGraph project in the platform web UI (on the current
+platform version the project/service creation is UI-driven). Everything after that runs over the
+documented [AutoGraph REST API](https://docs.arango.ai/agentic-ai-suite/autograph/reference/):
+`graphrag_ingest.py` drives `import-multiple → corpus/builds → rag-strategizer → orchestrate`, AutoGraph
+discovers the domains and assigns per-domain retrieval treatment automatically, and the cited answer
+uses the Retriever's Unified Search (`query_type 3`). Service postfixes are discovered at runtime
+(`graphrag.py`), never hardcoded.
 
 ## Repository contents
 ```
 src/ingest.py          multimodel core: schema, embed tickets, build topology, store alerts
 src/graphrag.py        auth + service discovery + the KG runbook lookup
-src/graphrag_ingest.py import runbooks into the knowledge graph + verify (skip-if-built / --reset)
+src/graphrag_ingest.py build the runbook KG with AutoGraph (import -> corpus build -> strategizer -> orchestrate) + verify (skip-if-built / --reset)
 src/resolver.py        the marquee AQL query + the cited, grounded answer + corroboration + evaluate()
 src/run_all.py         the whole pipeline in one command
 src/viz.py             regenerate the figures from live data (subgraph, knowledge graph, results)
@@ -146,8 +151,8 @@ assets/                architecture diagram + the data-driven figures (subgraph,
 
 ## Status
 - Multimodel core ✅
-- Runbook knowledge graph ✅ (11 runbooks, 80 entities, 120 relations)
-- Cited, grounded combined resolver ✅ (8/8 demo alerts grounded and corroborated)
+- AutoGraph runbook knowledge graph ✅ (11 runbooks → 197 entities, 287 relations, 4 communities; built over the AutoGraph REST API)
+- Cited, grounded combined resolver ✅ (Unified Search + content grounding; 8/8 demo alerts grounded and corroborated)
 
 The agent here is framework-free Python. LangChain / LangGraph and Arango's built-in **Ada**
 assistant are documented extension points.

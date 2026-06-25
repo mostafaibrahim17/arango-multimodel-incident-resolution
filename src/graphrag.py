@@ -15,8 +15,8 @@ load_dotenv()
 HOST = os.environ["ARANGO_HOST"].rstrip("/")  # gateway base, e.g. https://your-deployment.arango.ai
 USER = os.environ["ARANGO_USER"]
 PWD = os.environ["ARANGO_PASSWORD"]
-GRAPHRAG_DB = os.environ.get("GRAPHRAG_DB", "_system")
-GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "test-incident-demo")
+GRAPHRAG_DB = os.environ.get("GRAPHRAG_DB", "incident_demo")
+GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "incident-runbook-autograph")
 
 
 def kg_db():
@@ -25,13 +25,18 @@ def kg_db():
 
 
 def runbook_for_service(svc):
-    """The KG runbook Document whose citable_url targets this service.
+    """The KG runbook for this service, grounded on the runbook BODY (not metadata).
 
-    Lets the agent ground the answer in the exact runbook for the root service the multimodel
-    query precisely identified, rather than relying on fuzzy semantic retrieval alone.
+    AutoGraph stores each runbook in `{project}_sources` with the body in `content` and a
+    `**Service:** <svc>` header line. We match on that line -- NOT on file_name or citable_url:
+    AutoGraph leaves citable_url empty, and the file_name on the derived `_Documents` rows can be
+    misaligned with the content. `_sources` keeps filename and content aligned, so it yields both
+    the right body and a clean runbook name. This pins the answer to the exact runbook for the root
+    service the multimodel query identified, instead of relying on semantic retrieval alone.
     """
-    q = (f"FOR d IN `{GRAPHRAG_PROJECT}_Documents` FILTER CONTAINS(LOWER(d.citable_url), @svc) "
-         "LIMIT 1 RETURN {citable_url: d.citable_url, file_name: d.file_name, content: d.content}")
+    q = (f"FOR d IN `{GRAPHRAG_PROJECT}_sources` "
+         "FILTER CONTAINS(LOWER(d.content), CONCAT('**service:** ', @svc)) "
+         "LIMIT 1 RETURN {file_name: d.filename, content: d.content}")
     rows = list(kg_db().aql.execute(q, bind_vars={"svc": svc.lower()}))
     return rows[0] if rows else None
 
@@ -56,18 +61,26 @@ def list_services(jwt=None):
     return r.json().get("services", [])
 
 
-def _postfix(service_type, jwt=None):
-    """Postfix = everything after 'arangodb-graphrag-{type}-' in the serviceId.
+def _postfix(service_type, jwt=None, project=None):
+    """Postfix = the tail of the serviceId after its type prefix.
 
-    NB: the Importer carries a '-0' replica suffix that IS part of the postfix
-    (e.g. arangodb-graphrag-importer-sa1wc-0 -> 'sa1wc-0').
+    serviceId conventions on this platform:
+      arangodb-graphrag-importer-<pf>  /  arangodb-graphrag-retriever-<pf>  /  arangodb-autograph-<pf>
+    The importer keeps a '-0' replica suffix that IS part of the postfix
+    (arangodb-graphrag-importer-sa1wc-0 -> 'sa1wc-0'). When several services of a type exist
+    (one per project), pass `project` to disambiguate by genaiProjectName.
     """
-    prefix = f"arangodb-graphrag-{service_type}-"
+    prefixes = ([f"arangodb-graphrag-{service_type}-"] if service_type in ("importer", "retriever")
+                else [f"arangodb-{service_type}-", f"arangodb-graphrag-{service_type}-"])
     for s in list_services(jwt):
+        if project and s.get("genaiProjectName") != project:
+            continue
         sid = s.get("serviceId", "")
-        if sid.startswith(prefix):
-            return sid[len(prefix):]
-    raise RuntimeError(f"no {service_type} service found in list_services (deploy it via the UI first)")
+        for prefix in prefixes:
+            if sid.startswith(prefix):
+                return sid[len(prefix):]
+    raise RuntimeError(f"no {service_type} service found for project {project!r} in list_services "
+                       "(create the AutoGraph project / deploy the service via the UI first)")
 
 
 def importer_postfix(jwt=None):
@@ -75,11 +88,12 @@ def importer_postfix(jwt=None):
 
 
 def retriever_postfix(jwt=None):
-    return _postfix("retriever", jwt)
+    # one retriever per project -> disambiguate to the AutoGraph project's retriever
+    return _postfix("retriever", jwt, project=GRAPHRAG_PROJECT)
 
 
 def autograph_postfix(jwt=None):
-    return _postfix("autograph", jwt)
+    return _postfix("autograph", jwt, project=GRAPHRAG_PROJECT)
 
 
 def importer_url(postfix=None, jwt=None):
@@ -90,8 +104,9 @@ def retriever_url(postfix=None, jwt=None):
     return f"{HOST}/graphrag/retriever/{postfix or retriever_postfix(jwt)}/v1"
 
 
-def autograph_url(jwt=None):
-    return f"{HOST}/autograph/v1"
+def autograph_url(postfix=None, jwt=None):
+    # AutoGraph control plane: import-multiple, corpus/builds, rag-strategizer, orchestrate
+    return f"{HOST}/autograph/{postfix or autograph_postfix(jwt)}/v1"
 
 
 if __name__ == "__main__":
