@@ -2,7 +2,7 @@
 
 > **Environment:** Arango Contextual Data Platform 4.0 pilot at `https://your-deployment.arango.ai` (Arango engine 3.12.9 Enterprise, gateway on port `8529`). Root auth, JWT obtained via `POST /_open/auth`.
 >
-> **The one thing to know up front:** on this pilot the raw ACP service-install API (`POST /_platform/acp/v1/graphragimporter`) is **bug-blocked** — it returns `400 "Project  not found"` (note the blank project name) even with a schema-correct body against a project that exists and reads back fine. The **web UI deploys the same services successfully** (confirmed: importer `tm5i7` running). So **service deploy currently MUST be done in the UI.** Auth, health, project reads, service listing, and every data-plane call work fine over CLI. Each step below is tagged **[CLI]** or **[UI ONLY]** so the boundary is never ambiguous.
+> **Known limitation (CDP 4.0, as of 2026-07):** the raw ACP service-install API (`POST /_platform/acp/v1/graphragimporter`) returns `400 "Project  not found"` (blank project name) even with a schema-correct body against a project that exists and reads back fine, so **service deploy must be done in the web UI** on this platform version. Auth, health, project reads, service listing, and every data-plane call work over CLI. Each step below is tagged **[CLI]** or **[UI ONLY]** so the boundary is never ambiguous.
 
 Throughout, `$EP` is the external endpoint:
 
@@ -65,7 +65,7 @@ Docs: [Control Plane (ACP) → Listing services](https://docs.arango.ai/platform
 
 ## Step 4 — Create the GraphRAG project **[UI ONLY]**
 
-> **Why UI:** the ACP project-create API (`POST /_platform/acp/v1/project`) does technically exist, but on this pilot the downstream service-install API rejects the project (`400 "Project  not found"`). The UI creates the project AND wires it to the importer in one flow that the API path does not reproduce here. Create the project in the UI so the deployed services bind to it correctly.
+> **Why UI:** the ACP project-create API (`POST /_platform/acp/v1/project`) exists, but on this platform version the downstream service-install API rejects the project (`400 "Project  not found"`). The UI creates the project and wires it to the importer in one flow, so create the project in the UI to ensure the deployed services bind to it correctly.
 
 **Click-path:**
 
@@ -84,7 +84,7 @@ Docs: [GraphRAG web interface → Create a GraphRAG project](https://docs.arango
 
 ## Step 5 — Start the Importer and Retriever services **[UI ONLY]**
 
-> **Why UI:** this is the step the raw API cannot do on this env. `POST /_platform/acp/v1/graphragimporter` returns `400 "Project  not found"` despite a valid project; the UI's **Start importer service** button succeeds (confirmed running importer `tm5i7`). Same applies to the retriever.
+> **Why UI:** the raw API cannot do this step on this platform version. `POST /_platform/acp/v1/graphragimporter` returns `400 "Project  not found"` despite a valid project, while the UI's **Start importer service** button succeeds. The same applies to the retriever.
 
 Both services are configured from the **Project Settings** dialog. Open it either way:
 
@@ -185,7 +185,7 @@ Docs: [Control Plane (ACP) → Listing services / Service status / serviceId res
 
 ---
 
-## Can ANY CLI deploy these services today? — Honest answer: No
+## Can any CLI deploy these services today?
 
 There **is** an official Arango command-line tool, but it does **not** wrap the ACP per-service install API, so it cannot replace the UI deploy on this pilot.
 
@@ -205,13 +205,13 @@ None of these touch GraphRAG **Importer/Retriever** service instances. There is 
 
 Docs: [CDP install/upgrade (Platform CLI introduced)](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/) · [Offline setup — full `arangodb_operator_platform` command catalog](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/offline-setup/)
 
-### The CLI path that *should* work but is bug-blocked
+### The intended CLI deploy path (currently blocked)
 
 The ACP REST API is the intended scriptable deploy surface:
 
 ```bash
-# This is the call that SHOULD let us fully CLI-ify deploy — but returns
-# 400 "Project  not found" (blank project name) on this pilot.
+# Intended full-CLI deploy call — currently returns
+# 400 "Project  not found" (blank project name) on this platform version.
 curl -s -X POST "$EP/_platform/acp/v1/graphragimporter" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -232,9 +232,7 @@ curl -s -X POST "$EP/_platform/acp/v1/graphragimporter" \
   }'
 ```
 
-The body above is schema-correct per the ACP docs, and the named project reads back fine via `GET /_platform/acp/v1/project_by_name/<db>/<project>`. The `400 "Project  not found"` with a **blank** project name points to a server-side bug where the install handler isn't resolving `env.project_name` on this build. **This is the single blocker that, once fixed, lets us drop the UI step and script the entire deploy** (project create → importer install → retriever install) end-to-end from CLI.
-
-**Recommendation for the tutorial:** present Steps 1–3 and 6 as CLI, Steps 4–5 as a UI deploy with the exact click-path, and footnote that the API-install path is the forward-looking automation once Arango fixes the `project_name` resolution bug on this env. Don't present the `graphragimporter` POST as working — it doesn't here.
+The body above is schema-correct per the ACP docs, and the named project reads back fine via `GET /_platform/acp/v1/project_by_name/<db>/<project>`. The `400 "Project  not found"` with a **blank** project name indicates a server-side issue where the install handler does not resolve `env.project_name` on this platform version. Once resolved, this path allows the entire deploy (project create → importer install → retriever install) to be scripted end-to-end from CLI, removing the UI step.
 
 ---
 
