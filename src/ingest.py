@@ -48,7 +48,7 @@ def main():
     # Schema: drop + recreate so the script is idempotent.
     if db.has_graph("service_topology"):
         db.delete_graph("service_topology")
-    for c in ["incidents", "services", "teams", "alerts", "service_depends_on"]:
+    for c in ["incidents", "services", "teams", "alerts", "service_depends_on", "service_health"]:
         if db.has_collection(c):
             db.delete_collection(c)
 
@@ -69,6 +69,23 @@ def main():
     db.collection("service_depends_on").insert_many(
         [{"_from": f"services/{a}", "_to": f"services/{b}"} for a, b in topo["depends_on"]]
     )
+
+    # Service health: current status of each service, used by the reasoning layer to pivot root cause.
+    service_health = db.create_collection("service_health")
+    service_health.insert_many([
+        {"_key": "onboarding-api",       "status": "healthy",  "note": "responding normally"},
+        {"_key": "document-service",     "status": "degraded", "note": "high latency on /generate-envelope"},
+        {"_key": "merchant-service",     "status": "healthy",  "note": ""},
+        {"_key": "notification-service", "status": "healthy",  "note": ""},
+        {"_key": "payment-gateway",      "status": "healthy",  "note": ""},
+        {"_key": "auth-service",         "status": "healthy",  "note": ""},
+        {"_key": "user-db",              "status": "healthy",  "note": ""},
+        {"_key": "merchant-db",          "status": "healthy",  "note": ""},
+        {"_key": "network-gateway",      "status": "healthy",  "note": ""},
+        {"_key": "api-gateway",          "status": "healthy",  "note": ""},
+        {"_key": "web-portal",           "status": "healthy",  "note": ""},
+        {"_key": "analytics-service",    "status": "healthy",  "note": ""},
+    ])
 
     # Tickets: load the dataset, embed short_description + description, store with resolution.
     oai = OpenAI()

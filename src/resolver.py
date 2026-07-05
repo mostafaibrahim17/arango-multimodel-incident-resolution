@@ -32,9 +32,11 @@ LET similar = (
 LET root = @service != null ? @service : FIRST(similar).service
 LET affected = (
   FOR v, e, p IN 0..3 OUTBOUND CONCAT("services/", root) GRAPH "service_topology"
-    COLLECT service = v._key, name = v.name AGGREGATE depth = MIN(LENGTH(p.edges))
+    LET health = DOCUMENT("service_health", v._key)
+    COLLECT service = v._key, name = v.name, status = health.status, note = health.note
+      AGGREGATE depth = MIN(LENGTH(p.edges))
     SORT depth
-    RETURN {service, name, depth}
+    RETURN {service, name, depth, status, note}
 )
 LET team = DOCUMENT("teams", DOCUMENT("services", root).team)
 RETURN {
@@ -45,6 +47,43 @@ RETURN {
 }
 """
 
+def reason(payload):
+    """
+    The reasoning layer: form a hypothesis, check it against health signals,
+    pivot the root cause if a degraded upstream dependency better explains the alert.
+    """
+    alerting_service = payload["root_service"]
+    affected = payload["affected_services"]
+
+    alerting_health = next(
+        (s for s in affected if s["service"] == alerting_service), {}
+    ).get("status", "unknown")
+
+    degraded_upstream = next(
+        (s for s in affected if s["depth"] > 0 and s.get("status") == "degraded"),
+        None
+    )
+
+    if alerting_health != "degraded" and degraded_upstream:
+        true_root = degraded_upstream["service"]
+        confidence = "high"
+        reasoning = (
+            f"{alerting_service} is reporting the symptom, but {true_root} "
+            f"(depth {degraded_upstream['depth']}) is degraded. Pivoting root cause."
+        )
+    else:
+        true_root = alerting_service
+        confidence = "high" if alerting_health == "degraded" else "medium"
+        reasoning = (
+            f"{alerting_service} is the alerting service "
+            f"({'degraded' if alerting_health == 'degraded' else 'status unknown'})."
+        )
+
+    payload["root_service"] = true_root
+    payload["reasoning"] = reasoning
+    payload["confidence"] = confidence
+    payload["verify"] = f"kubectl top pods -l app={true_root} && kubectl logs -l app={true_root} --tail=50"
+    return payload
 
 def resolve_timed(alert, db=None):
     """resolve() plus timings: how long the alert text took to embed vs. the multimodel AQL itself.
@@ -61,8 +100,8 @@ def resolve_timed(alert, db=None):
     query_start = time.perf_counter()
     payload = db.aql.execute(MARQUEE, bind_vars={"vec": vec, "service": alert.get("service")}).next()
     query_ms = (time.perf_counter() - query_start) * 1000
+    payload = reason(payload)
     return payload, embed_ms, query_ms
-
 
 def resolve(alert):
     """Given an alert dict ({text, service?}), return the structured resolution payload."""
