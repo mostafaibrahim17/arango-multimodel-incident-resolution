@@ -47,11 +47,30 @@ RETURN {
 }
 """
 
-def reason(payload):
-    """
-    The reasoning layer: form a hypothesis, check it against health signals,
-    pivot the root cause if a degraded upstream dependency better explains the alert.
-    """
+REASONING_MODEL = "gpt-5-mini"
+
+REASONING_PROMPT = """You are a senior SRE deciding the true root cause of a production incident.
+
+You receive the evidence one multimodel query already gathered: the alert, the top similar past
+incidents (vector search), and the dependency blast radius of the alerting service with each
+service's CURRENT health status (graph traversal + health join).
+
+Decide which single service is the true root cause:
+- The alerting service is the default hypothesis.
+- Pivot to a dependency ONLY if that dependency is degraded AND its degradation plausibly
+  explains the alert's symptom. Depth matters: a degraded direct dependency (depth 1) usually
+  explains the symptom better than one further away.
+- If several services are degraded, pick the one whose health note best matches the symptom.
+- Never invent a service: root_service MUST be the exact `service` key (e.g. "document-service",
+  not the display name "Document Service") of one of the entries in affected_services.
+
+Return reasoning as 1-2 short sentences citing the evidence (service, depth, status/note).
+confidence: high = the evidence cleanly explains the symptom; medium = plausible but not
+conclusive; low = evidence is thin or conflicting."""
+
+
+def reason_rules(payload):
+    """Deterministic fallback: pivot to the first degraded upstream dependency, if any."""
     alerting_service = payload["root_service"]
     affected = payload["affected_services"]
 
@@ -78,10 +97,84 @@ def reason(payload):
             f"{alerting_service} is the alerting service "
             f"({'degraded' if alerting_health == 'degraded' else 'status unknown'})."
         )
+    return true_root, reasoning, confidence, "rules"
+
+
+def reason(payload, alert_text=None, db=None):
+    """
+    The reasoning layer: an LLM judges the evidence the multimodel query gathered and decides
+    the true root cause -- pivoting away from the alerting service when a degraded dependency
+    better explains the symptom. Falls back to the deterministic rule if the API call fails
+    or returns a service outside the blast radius.
+    """
+    affected = payload["affected_services"]
+    known_services = {s["service"] for s in affected}
+
+    try:
+        evidence = {
+            "alert": {
+                "service": payload["root_service"],
+                "symptom": alert_text or (
+                    payload["similar_incidents"][0].get("short_description", "")
+                    if payload.get("similar_incidents") else ""
+                ),
+            },
+            "similar_incidents": [
+                {k: inc[k] for k in ("number", "short_description", "service", "similarity")}
+                for inc in payload.get("similar_incidents", [])
+            ],
+            "affected_services": affected,
+        }
+        response = OpenAI().chat.completions.create(
+            model=REASONING_MODEL,
+            reasoning_effort="minimal",  # the evidence packet is small; minimal keeps the judge ~2s
+            messages=[
+                {"role": "system", "content": REASONING_PROMPT},
+                {"role": "user", "content": json.dumps(evidence)},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "root_cause_decision",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "root_service": {"type": "string"},
+                            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                            "reasoning": {"type": "string"},
+                        },
+                        "required": ["root_service", "confidence", "reasoning"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        )
+        decision = json.loads(response.choices[0].message.content)
+        true_root = decision["root_service"]
+        if true_root not in known_services:
+            # Tolerate the display name ("Document Service") by mapping it back to the key.
+            by_name = {s["name"].lower(): s["service"] for s in affected if s.get("name")}
+            true_root = by_name.get(true_root.lower())
+            if true_root is None:
+                raise ValueError(f"LLM proposed unknown service {decision['root_service']!r}")
+        reasoning, confidence, method = decision["reasoning"], decision["confidence"], "llm-judge"
+    except Exception as exc:  # API failure or invalid decision -> deterministic fallback
+        print(f"[reason] LLM judge unavailable ({exc}); using rules fallback", file=sys.stderr)
+        true_root, reasoning, confidence, method = reason_rules(payload)
+
+    # Re-point the on-call owner at the decided root (the AQL computed it for the
+    # alerting service before the pivot).
+    if db is not None and true_root != payload["root_service"]:
+        svc = db.collection("services").get(true_root)
+        team = db.collection("teams").get(svc["team"]) if svc and svc.get("team") else None
+        if team:
+            payload["on_call"] = {"team": team["name"], "contact": team["oncall"]}
 
     payload["root_service"] = true_root
     payload["reasoning"] = reasoning
     payload["confidence"] = confidence
+    payload["method"] = method
     payload["verify"] = f"kubectl top pods -l app={true_root} && kubectl logs -l app={true_root} --tail=50"
     return payload
 
@@ -100,7 +193,7 @@ def resolve_timed(alert, db=None):
     query_start = time.perf_counter()
     payload = db.aql.execute(MARQUEE, bind_vars={"vec": vec, "service": alert.get("service")}).next()
     query_ms = (time.perf_counter() - query_start) * 1000
-    payload = reason(payload)
+    payload = reason(payload, alert_text=alert.get("text"), db=db)
     return payload, embed_ms, query_ms
 
 def resolve(alert):
