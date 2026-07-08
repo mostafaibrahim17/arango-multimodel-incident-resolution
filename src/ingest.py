@@ -48,7 +48,7 @@ def main():
     # Schema: drop + recreate so the script is idempotent.
     if db.has_graph("service_topology"):
         db.delete_graph("service_topology")
-    for c in ["incidents", "services", "teams", "alerts", "service_depends_on"]:
+    for c in ["incidents", "services", "teams", "alerts", "service_depends_on", "service_signals"]:
         if db.has_collection(c):
             db.delete_collection(c)
 
@@ -56,6 +56,7 @@ def main():
     services = db.create_collection("services")
     teams = db.create_collection("teams")
     alerts = db.create_collection("alerts")
+    signals = db.create_collection("service_signals")
     graph = db.create_graph("service_topology")
     graph.create_edge_definition(
         edge_collection="service_depends_on",
@@ -69,6 +70,11 @@ def main():
     db.collection("service_depends_on").insert_many(
         [{"_from": f"services/{a}", "_to": f"services/{b}"} for a, b in topo["depends_on"]]
     )
+
+    # Service health signals (key-value): live per-service status the resolver joins to the
+    # dependency subgraph to find the degraded UPSTREAM dependency, not just the alerting leaf.
+    sig = json.load(open("data/service_signals.json"))
+    signals.insert_many([{"_key": k, **v} for k, v in sig.items()])
 
     # Tickets: load the dataset, embed short_description + description, store with resolution.
     oai = OpenAI()
@@ -94,6 +100,14 @@ def main():
         ]
     )
 
+    # Seed incidents: a small set of hand-authored synthetic precedents (disclosed as synthetic)
+    # the public dataset lacks -- a shallow "restart the leaf" decoy plus user-db replica-lag
+    # cascades where the real fix was upstream. These give the resolver real structural precedent
+    # to retrieve. Embedded the same way and indexed alongside the dataset rows.
+    seed = json.load(open("data/seed_incidents.json"))
+    seed_vecs = embed(oai, [f'{s["short_description"]} {s["description"]}' for s in seed])
+    incidents.insert_many([{**s, "embedding": v} for s, v in zip(seed, seed_vecs)])
+
     # Vector index is created after the data loads so it trains on the full set.
     incidents.add_index(
         {
@@ -118,8 +132,9 @@ def main():
     )
 
     print(
-        f"ingested {incidents.count()} incidents, {alerts.count()} alerts, {services.count()} services, "
-        f"{teams.count()} teams, {len(topo['depends_on'])} dependency edges"
+        f"ingested {incidents.count()} incidents ({len(seed)} hand-authored seeds), "
+        f"{alerts.count()} alerts, {services.count()} services, {teams.count()} teams, "
+        f"{len(topo['depends_on'])} dependency edges, {signals.count()} service signals"
     )
 
 

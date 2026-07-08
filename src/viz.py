@@ -142,6 +142,183 @@ def fig_kg_sample():
           f"{len([n for n in G.nodes if not is_doc[n]])} entities, {len(bridge)} shared)")
 
 
+def _wrap(s, n=58):
+    import textwrap
+    return "\n".join(textwrap.wrap(s, n)) if s else ""
+
+
+STAGE_COLORS = {
+    "VECTOR": TEAL, "GRAPH": NAVY, "KEY-VALUE (health)": AMBER, "PIVOT": "#d94e3a",
+    "PRECEDENT (vector #2)": TEAL, "ELIMINATE": "#d94e3a", "RETRIEVER": GREEN, "VERDICT": "#2e7d32",
+}
+
+
+def fig_reasoning_chain(reasoned):
+    """The agent's reasoning, stage by stage: VECTOR -> GRAPH -> health -> PIVOT -> precedent ->
+    eliminate -> GraphRAG citation -> verdict. Makes the multi-hop traversal tangible. -> assets/reasoning-chain.png"""
+    chain = reasoned["reasoning_chain"]
+    n = len(chain)
+    fig, ax = plt.subplots(figsize=(12, 0.92 * n + 1.1))
+    ax.set_xlim(0, 12)
+    ax.set_ylim(0, n)
+    ax.axis("off")
+    for i, step in enumerate(chain):
+        y = n - i - 1
+        color = STAGE_COLORS.get(step["stage"], "#555")
+        _box(ax, 0.2, y + 0.14, 2.9, 0.72, step["stage"], color, 8.5)
+        ax.text(3.3, y + 0.5, _wrap(step["detail"], 86), va="center", ha="left",
+                fontsize=8.3, color="#222")
+        if i < n - 1:
+            ax.annotate("", xy=(1.65, y + 0.14), xytext=(1.65, y - 0.14),
+                        arrowprops=dict(arrowstyle="<|-", color="#bbb", lw=1.5))
+    sym = reasoned["symptom_service"]
+    root = reasoned["root_cause"]["service"]
+    title = (f"How the agent reasons — alert on {sym}  →  real root cause: {root}"
+             if reasoned["pivoted"] else f"How the agent reasons — alert on {sym}")
+    ax.set_title(title, fontsize=11, pad=10)
+    plt.tight_layout()
+    plt.savefig("assets/reasoning-chain.png", dpi=130, bbox_inches="tight")
+    plt.close()
+    print("wrote assets/reasoning-chain.png")
+
+
+def fig_ablation(reasoned):
+    """Same alert, three retrieval strategies side by side, with which gets it right.
+    The 10-second proof of the capability gap. -> assets/ablation.png"""
+    abl = reasoned["ablation"]
+    fig, ax = plt.subplots(figsize=(12.5, 3.4))
+    ax.axis("off")
+    cols = ["Configuration", "Root cause", "Recommended action", "Pages", "Verdict"]
+
+    def _short(text, n=86):
+        return text if len(text) <= n else text[:n].rstrip(" .,;") + "..."
+
+    cell_text = [[a["config"], a["root"], _wrap(_short(a["action"]), 40), a["paged"] or "-", a["verdict"]]
+                 for a in abl]
+    table = ax.table(cellText=cell_text, colLabels=cols, loc="center", cellLoc="left",
+                     colWidths=[0.16, 0.12, 0.40, 0.16, 0.18])
+    table.auto_set_font_size(False)
+    table.set_fontsize(8.5)
+    table.scale(1, 3.0)
+    for c in range(len(cols)):
+        cell = table[0, c]
+        cell.set_facecolor(NAVY)
+        cell.set_text_props(color="white", fontweight="bold")
+    for r, a in enumerate(abl, start=1):
+        v = a["verdict"]
+        fc = "#f4c7c3" if "WRONG" in v else "#fde9c8" if "no fix" in v else "#cdebcd"
+        table[r, 4].set_facecolor(fc)
+    ax.set_title("Same alert, three retrieval strategies — only the full multimodel query is right and cited",
+                 fontsize=11, pad=14)
+    plt.tight_layout()
+    plt.savefig("assets/ablation.png", dpi=130, bbox_inches="tight")
+    plt.close()
+    print("wrote assets/ablation.png")
+
+
+def fig_polyglot():
+    """What the single AQL query replaces: a sequential polyglot 'Frankenstack' of separate
+    vector + graph + key-value systems plus glue. -> assets/polyglot-vs-aql.png"""
+    fig, ax = plt.subplots(figsize=(12.5, 5.6))
+    ax.set_xlim(0, 12.5)
+    ax.set_ylim(0, 5.6)
+    ax.axis("off")
+    # Left: the Frankenstack
+    _box(ax, 0.2, 4.9, 5.9, 0.55, "Frankenstack — separate systems, sequential calls", "#7a2418", 10)
+    steps = [
+        "1.  vector store (e.g. Pinecone): similar incidents",
+        "2.  graph DB (e.g. Neo4j): blast-radius traversal",
+        "3.  key-value (e.g. Redis): per-service health signal",
+        "4.  key-value (e.g. Redis): on-call owner",
+        "5.  app code: join results, handle 4 partial failures",
+    ]
+    for i, s in enumerate(steps):
+        _box(ax, 0.2, 4.05 - i * 0.78, 5.9, 0.6, s, TEAL if i < 4 else "#666", 8.5, "white")
+    ax.text(3.15, 0.15, "4 systems · 4 auth contexts · 4 round trips · ~50 lines of glue",
+            ha="center", fontsize=8.5, style="italic", color="#7a2418")
+    # Right: one AQL query
+    _box(ax, 6.4, 4.9, 5.9, 0.55, "Arango — one store, one AQL round trip", "#1f5f2e", 10)
+    aql = ("LET similar  = (FOR i IN incidents       // vector\n"
+           "    SORT APPROX_NEAR_COSINE(i.embedding,@vec) DESC LIMIT 3 RETURN i)\n"
+           "LET affected = (FOR v IN 0..3 OUTBOUND    // graph\n"
+           "    @leaf GRAPH 'service_topology' RETURN v)\n"
+           "LET degraded = (FOR a IN affected         // key-value health\n"
+           "    FILTER DOCUMENT('service_signals',a).status=='degraded' RETURN a)\n"
+           "LET team     = DOCUMENT('teams',          // key-value owner\n"
+           "    DOCUMENT('services', root).team)\n"
+           "RETURN { similar, affected, degraded, team }")
+    ax.add_patch(FancyBboxPatch((6.4, 0.55), 5.9, 4.05, boxstyle="round,pad=0.02,rounding_size=0.04",
+                                fc="#0f1f17", ec="none"))
+    ax.text(6.6, 4.45, aql, va="top", ha="left", fontsize=7.3, family="monospace", color="#cfe8d4")
+    ax.text(9.35, 0.15, "1 system · 1 auth context · 1 round trip · no glue",
+            ha="center", fontsize=8.5, style="italic", color="#1f5f2e")
+    plt.tight_layout()
+    plt.savefig("assets/polyglot-vs-aql.png", dpi=130, bbox_inches="tight")
+    plt.close()
+    print("wrote assets/polyglot-vs-aql.png")
+
+
+def fig_cascade_subgraph(reasoned):
+    """The dependency subgraph for the hero alert, highlighting the cascade: the alerting leaf
+    (amber) and the degraded upstream root cause (red), with the path between them. -> assets/affected-subgraph.png"""
+    affected = {a["service"]: a for a in reasoned["structure"]["affected_services"]}
+    topo = json.load(open("data/topology.json"))
+    names = {k: v["name"] for k, v in topo["services"].items()}
+    sym = reasoned["symptom_service"]
+    root = reasoned["root_cause"]["service"]
+    G = nx.DiGraph()
+    for a in affected:
+        G.add_node(a)
+    for fr, to in topo["depends_on"]:
+        if fr in affected and to in affected:
+            G.add_edge(fr, to)
+    pos = nx.spring_layout(G, seed=7, k=1.3)
+    depth = {k: v["depth"] for k, v in affected.items()}
+    colors = []
+    for node in G.nodes:
+        if node == sym:
+            colors.append(AMBER)
+        elif node == root:
+            colors.append("#d94e3a")
+        else:
+            colors.append([TEAL, "#69a6a6", "#9ccb6a", "#c3dea0"][min(depth[node], 3)])
+    # highlight the shortest path leaf -> root if present
+    path_edges = []
+    try:
+        sp = nx.shortest_path(G, sym, root)
+        path_edges = list(zip(sp, sp[1:]))
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        pass
+    plt.figure(figsize=(9.5, 6.2))
+    nx.draw_networkx_edges(G, pos, edge_color="#ccc", arrows=True, arrowsize=13, width=1.2)
+    if path_edges:
+        nx.draw_networkx_edges(G, pos, edgelist=path_edges, edge_color="#d94e3a",
+                               arrows=True, arrowsize=18, width=2.6)
+    nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=2300, edgecolors="white")
+    nx.draw_networkx_labels(G, pos, {n: names.get(n, n) for n in G.nodes}, font_size=8)
+    title = (f"Alert fired on {names.get(sym, sym)} (amber); real root cause {names.get(root, root)} "
+             f"(red), {reasoned['root_cause']['depth']} hops upstream"
+             if reasoned["pivoted"] else f"Affected-service subgraph for {names.get(sym, sym)}")
+    plt.title(title, fontsize=10.5)
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig("assets/affected-subgraph.png", dpi=130, bbox_inches="tight")
+    plt.close()
+    print("wrote assets/affected-subgraph.png")
+
+
+def cascade_figures(alert_path="data/alert.hero.json", reasoned=None):
+    """Render all cascade figures from one reason() pass (compute once, reuse)."""
+    if reasoned is None:
+        from resolver import reason
+        reasoned = reason(json.load(open(alert_path)))
+    fig_reasoning_chain(reasoned)
+    fig_ablation(reasoned)
+    fig_cascade_subgraph(reasoned)
+    fig_polyglot()
+    return reasoned
+
+
 def fig_results_from_rows(rows):
     """The results showcase: one bar per alert (multimodel-query latency), colored by whether it
     grounded on the correct runbook, titled with the grounded/corroborated tally. Precomputed rows
