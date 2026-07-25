@@ -1,0 +1,27 @@
+{
+  "user-db": {
+    "status": "degraded",
+    "detail": "read_replica_lag 8.4s after primary failover 14m ago",
+    "observed_min_ago": 14
+  },
+  "merchant-service": {
+    "status": "healthy",
+    "detail": "nominal; p99 within SLO",
+    "observed_min_ago": 2
+  },
+  "onboarding-api": {
+    "status": "healthy",
+    "detail": "nominal; 5xx at baseline",
+    "observed_min_ago": 1
+  },
+  "document-service": {
+    "status": "healthy",
+    "detail": "nominal; render workers under 60% util",
+    "observed_min_ago": 3
+  },
+  "auth-service": {
+    "status": "healthy",
+    "detail": "nominal; login p99 within SLO",
+    "observed_min_ago": 2
+  }
+}

@@ -1,0 +1,46 @@
+[
+  {
+    "_key": "INC-SEED-ESIGN-1",
+    "short_description": "Merchants unable to e-sign the Merchant Agreement; onboarding stuck at the document step with a permission error in the UI",
+    "description": "Merchants could not e-sign the Merchant Agreement and onboarding was stuck at the document step with a permission error in the UI. onboarding-api returned HTTP 403 permission_denied. Treated as a stale permission cache after a role change; affected new-merchant signups in us-east-1.",
+    "resolution": "Restarted onboarding-api pods and invalidated the merchant permission cache; the e-sign step recovered. Closed as an onboarding-api permission-cache issue.",
+    "category": "Software",
+    "assignment_group": "Onboarding On-Call",
+    "urgency": "1",
+    "impact": "1",
+    "service": "onboarding-api"
+  },
+  {
+    "_key": "INC-SEED-UDB-1",
+    "short_description": "Onboarding e-sign failures traced to user-db read-replica lag after failover",
+    "description": "Merchants hit permission and 'merchant not found' errors at the onboarding e-sign step. onboarding-api and merchant-service looked healthy in isolation. The real cause was user-db read-replica lag following a primary failover; merchant-service was serving stale reads two hops downstream of the alert.",
+    "resolution": "Routed merchant-service critical reads to the user-db primary until the replica caught up, then reverted. Restarting onboarding-api had no effect; the fix was at user-db, not the onboarding tier.",
+    "category": "Software",
+    "assignment_group": "Identity On-Call",
+    "urgency": "1",
+    "impact": "1",
+    "service": "user-db"
+  },
+  {
+    "_key": "INC-SEED-UDB-2",
+    "short_description": "Auth login failures and stale reads during user-db replica failover",
+    "description": "auth-service login latency above SLO and intermittent 'user not found' immediately after writes. Correlated with a user-db read-replica failover event. Each downstream service looked fine on its own dashboard.",
+    "resolution": "Routed auth reads to the user-db primary until replica lag drained below 5s, then failed back. Restarting auth-service did not resolve it; the problem was the shared user-db replica.",
+    "category": "Software",
+    "assignment_group": "Identity On-Call",
+    "urgency": "1",
+    "impact": "1",
+    "service": "user-db"
+  },
+  {
+    "_key": "INC-SEED-UDB-3",
+    "short_description": "Cascading permission errors across onboarding and auth from user-db lag",
+    "description": "A user-db replica fell behind after a failover; both onboarding-api (via merchant-service) and auth-service surfaced permission and stale-read errors at the same time. Front-line restarts of the leaf services were attempted first and failed.",
+    "resolution": "Promoted a healthy user-db replica and routed reads to the primary; lag cleared and the downstream errors stopped. Confirmed the leaf-service restarts were a red herring; the shared upstream dependency was the root cause.",
+    "category": "Software",
+    "assignment_group": "Identity On-Call",
+    "urgency": "1",
+    "impact": "1",
+    "service": "user-db"
+  }
+]
