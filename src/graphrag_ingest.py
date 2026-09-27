@@ -1,7 +1,7 @@
 """Build the runbook knowledge graph with AutoGraph.
 
 AutoGraph discovers the knowledge domains in the runbook corpus and assigns a retrieval strategy per
-domain (FullGraphRAG for entity-rich content, VectorRAG for simpler content), then builds the graph.
+domain (GraphRAG for entity-rich content, VectorRAG for simpler content), then builds the graph.
 Most of the pipeline is scriptable over the documented REST API; the final entity build is a UI click:
 
     health -> import-multiple (per module) -> corpus/builds -> rag-strategizer/analyze    [scriptable]
@@ -9,9 +9,9 @@ Most of the pipeline is scriptable over the documented REST API; the final entit
 
 Two steps stay in the web UI (same pattern as deploying the Importer/Retriever): (1) create the
 AutoGraph PROJECT once -- that deploys the `arangodb-autograph-<pf>` control service + the project's
-retriever; (2) click "Continue to Import" to run orchestration. The REST POST /orchestrate returns
+retriever; (2) click "Continue to build" to run orchestration. The REST POST /orchestrate returns
 `{"totalJobs": 0}` and builds nothing on this platform version (verified on a clean slate), so the
-final entity build is a UI click. Everything else (import, corpus build, the FullGraphRAG strategizer)
+final entity build is a UI click. Everything else (import, corpus build, the GraphRAG strategizer)
 runs here. The control plane lives at `{HOST}/autograph/{postfix}/v1` (postfix discovered at runtime).
 
 Usage:
@@ -94,7 +94,7 @@ def import_runbooks(module="default"):
     """Import every data/runbooks/**/*.md into AutoGraph as ONE module.
 
     The validated build imports the whole corpus as a single module so the RAG Strategizer sees one
-    incident-response domain and assigns it FullGraphRAG (1 partition -> 197 entities / 287 relations).
+    incident-response domain and assigns it GraphRAG (a single entity-rich partition).
     Splitting into per-folder modules makes AutoGraph cluster each separately and can downgrade the
     smaller ones to VectorRAG -- not what we want here.
     """
@@ -117,7 +117,7 @@ def import_runbooks(module="default"):
 
 
 def build_corpus():
-    """Corpus build -> RAG strategizer (FullGraphRAG high) -> orchestrate. All three are ASYNC:
+    """Corpus build -> RAG strategizer (GraphRAG high) -> orchestrate. All three are ASYNC:
     each POST returns immediately ('started'); we poll the collections / strategy they populate."""
     jwt = token()
     base = autograph_url(jwt=jwt)
@@ -131,7 +131,7 @@ def build_corpus():
     _poll_collection(f"{PROJECT}_domains", label="corpus domains")
 
     # 2. RAG strategizer (async): assign a strategy per domain. Poll /strategy until it reports them.
-    #    full_graph_rag_strategy=high biases entity-rich runbooks to FullGraphRAG (vs the lighter VectorRAG).
+    #    full_graph_rag_strategy=high biases entity-rich runbooks to GraphRAG (vs the lighter VectorRAG).
     requests.post(f"{base}/rag-strategizer/analyze", headers=_auth(jwt),
                   json={"full_graph_rag_strategy": "high"}, timeout=120).raise_for_status()
     t0 = time.time()
@@ -147,11 +147,11 @@ def build_corpus():
     # 3. Orchestrate (the final entity-build) is a UI step on this platform version.
     #    The REST POST /orchestrate returns `{"totalJobs": 0}` and spawns no workers (verified on a
     #    clean slate), so the knowledge graph never builds from the API. The web UI's "Continue to
-    #    Import" button triggers it correctly. Everything up to here (import, corpus build, the
-    #    FullGraphRAG strategy) is scriptable; this last click is not -- same pattern as deploying the
-    #    services. So: open the AutoGraph project in the UI and click "Continue to Import", then re-run
+    #    build" button triggers it correctly. Everything up to here (import, corpus build, the
+    #    GraphRAG strategy) is scriptable; this last click is not -- same pattern as deploying the
+    #    services. So: open the AutoGraph project in the UI and click "Continue to build", then re-run
     #    this script (no args) to verify the entities built.
-    print("\nNEXT (UI): open the AutoGraph project in the web UI and click 'Continue to Import' to build\n"
+    print("\nNEXT (UI): open the AutoGraph project in the web UI and click 'Continue to build' to build\n"
           "the knowledge graph. The REST /orchestrate endpoint returns 0 jobs on this platform version.\n"
           "Then re-run `python graphrag_ingest.py` to verify.", flush=True)
     return "awaiting-ui-orchestrate"
