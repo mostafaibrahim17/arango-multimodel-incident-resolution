@@ -1,6 +1,6 @@
 # Incident-Resolution Agent on Arango
 
-A support-engineering agent built on the Arango Contextual Data Platform. When a live alert
+A support-engineering agent built on the [Arango Contextual Data Platform](https://docs.arango.ai/agentic-ai-suite/). When a live alert
 comes in, it returns in one pass the most similar past incidents, the affected-service blast
 radius, the on-call owner, **and** a cited, runbook-grounded next step. Tickets, service
 topology, alerts, and runbooks all live in **one** deployment: no separate vector store, no
@@ -14,6 +14,20 @@ blast radius, with inline citations. Across all 8 demo alerts, the primary citat
 correct runbook and both retrieval surfaces corroborate, 8 times out of 8. It is the
 support-engineering use case Zscaler runs in production at scale (40K+ daily AI requests on the
 same platform); here it is simulated end to end on a public dataset you can run yourself.
+
+## Contents
+- [How it works](#how-it-works)
+- [The hero alert](#the-hero-alert)
+- [The marquee query](#the-marquee-query)
+- [Results](#results)
+- [Repository layout](#repository-layout)
+- [The dataset](#the-dataset)
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [Running the pipeline](#running-the-pipeline)
+- [Models](#models)
+- [Status](#status)
+- [Attribution](#attribution)
 
 ## How it works
 
@@ -173,16 +187,17 @@ python src/resolver.py data/alert.sample.json   # 3. one alert -> structured pay
 python src/run_all.py                           # or the whole pipeline at once
 ```
 
-The [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) control service and the
-project Retriever are deployed once by creating the AutoGraph project in the platform web UI (on
-the current platform version, project and service creation is done in the UI). Everything after
-that runs over the documented
-[AutoGraph REST API](https://docs.arango.ai/agentic-ai-suite/autograph/reference/):
-`graphrag_ingest.py` drives `import-multiple`, `corpus/builds`, `rag-strategizer`, where AutoGraph
-discovers the domains and assigns per-domain retrieval treatment automatically. The final entity
-build is one click in the UI (**"Continue to build"**) because the REST `/orchestrate`
-endpoint returns zero jobs on the current platform version; everything up to it is scriptable.
-The cited answer uses the Retriever's Unified Search.
+The [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) service is deployed by
+creating the AutoGraph project through the platform web UI wizard (Documents, Configure, Build):
+you upload the runbooks as a category, choose the chat and embedding models, and start the build,
+which deploys the service and builds the Corpus Graph. From the project overview you then generate
+strategies, review the per-cluster strategy and ontology, and click **Continue to build** to build
+the Knowledge Graph. The import and corpus steps are also scriptable over the documented
+[AutoGraph REST API](https://docs.arango.ai/agentic-ai-suite/autograph/reference/) via
+`graphrag_ingest.py` (`import-multiple`, `corpus/builds`, `rag-strategizer`), where AutoGraph
+discovers the domains and assigns per-domain retrieval treatment automatically. Service postfixes
+are discovered at runtime (`src/graphrag.py`), never hardcoded. The cited answer uses the
+Retriever's Unified Search.
 
 ## Models
 
@@ -194,7 +209,7 @@ ingest and query sides, so the vector spaces match. The agent's reasoning uses `
 
 - Multimodel core ✅
 - AutoGraph runbook knowledge graph ✅: import, corpus build, and strategizer run via the
-  AutoGraph REST API; the final entity build is the one UI click.
+  AutoGraph REST API; the Knowledge Graph is built from the project overview in the UI.
 - Cited, grounded combined resolver ✅: Unified Search + content grounding; all 8 demo alerts
   grounded on the correct runbook and corroborated.
 
