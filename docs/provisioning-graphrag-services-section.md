@@ -1,6 +1,6 @@
 # Provisioning the Project and Deploying the GraphRAG Services
 
-> **Environment:** Arango Contextual Data Platform 4.0 pilot at `https://your-deployment.arango.ai` (Arango engine 3.12.9 Enterprise, gateway on port `8529`). Root auth, JWT obtained via `POST /_open/auth`.
+> **Environment:** Arango Contextual Data Platform pilot at `https://your-deployment.arango.ai` (Arango engine Enterprise, gateway on port `8529`). Root auth, JWT obtained via `POST /_open/auth`.
 
 Throughout, `$EP` is the external endpoint:
 
@@ -10,7 +10,7 @@ EP="https://your-deployment.arango.ai"
 
 ---
 
-## Step 1 — Get a JWT [CLI]
+## Step 1: Get a JWT [CLI]
 
 The ACP API authenticates with a standard Arango **user** JWT (not a superuser token), generated from the Arango auth endpoint.
 
@@ -31,20 +31,20 @@ Docs: [Control Plane (ACP) → Obtaining a Bearer token](https://docs.arango.ai/
 
 ---
 
-## Step 2 — Confirm ACP health [CLI]
+## Step 2: Confirm ACP health [CLI]
 
 ```bash
 curl -s -X GET "$EP/_platform/acp/v1/health" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-**Success signal:** `{"status":"OK"}`. (This endpoint requires a valid Bearer token — an empty/expired token fails.)
+**Success signal:** `{"status":"OK"}`. (This endpoint requires a valid Bearer token, i.e. an empty/expired token fails.)
 
 Docs: [Control Plane (ACP) → Health check](https://docs.arango.ai/platform-suite/control-plane-acp/)
 
 ---
 
-## Step 3 — Inspect what is already deployed [CLI]
+## Step 3: Inspect what is already deployed [CLI]
 
 List all installed services. An **empty body** (`{}`) returns everything; this is how you see what the control plane already has running and grab `serviceId`s.
 
@@ -55,65 +55,69 @@ curl -s -X POST "$EP/_platform/acp/v1/list_services" \
   -d '{}'
 ```
 
-**Success signal:** a JSON array/object of installed services. Before any deploy this may be empty or contain only base services. Capture the output — you will re-run this in Step 6 to read back the UI-deployed services.
+**Success signal:** a JSON array/object of installed services. Before any deploy this may be empty or contain only base services. Capture the output; you will re-run this in Step 6 to read back the service the wizard deploys.
 
 Docs: [Control Plane (ACP) → Listing services](https://docs.arango.ai/platform-suite/control-plane-acp/)
 
 ---
 
-## Step 4 — Create the GraphRAG project **[UI ONLY]**
+## Step 4: Build the AutoGraph project in the wizard **[UI ONLY]**
 
-**Click-path:**
+On the current platform version, AutoGraph is provisioned through a three-step wizard: **Documents → Configure → Build**. It deploys the AutoGraph service and builds the Corpus Graph in one flow, then drops you at the project overview where you generate retrieval strategies and build the Knowledge Graph.
 
-1. Open the web interface: `https://your-deployment.arango.ai/ui/`.
-2. **Pick the database first** — in the left-hand sidebar, select the database where the project should live. (This matters: the project and all its `<project>_Documents`, `<project>_Chunks`, etc. collections are created inside the selected database.)
-3. In the left sidebar, click **Agentic AI Suite**, then click **Run GraphRAG**.
-4. In the **GraphRAG projects** view, click **Add new project**.
-5. In the **Create GraphRAG project** modal, enter a **Name** (and optionally a description). The name is used as the collection prefix, so keep it to letters/digits/`_`/`-`, ≤ 63 chars.
-6. Click **Create project**.
+Open the web interface (`https://your-deployment.arango.ai/ui/`), **pick the database first** in the left sidebar (the project's collections are created inside the selected database), then open **Agentic AI Suite → AutoGraph Studio** and create a new project.
 
-**Success signal:** the new project appears in the **GraphRAG projects** list and opens to a project view with empty **Data Sources** and **Graph** sections.
+### 4a: Documents
 
-Docs: [GraphRAG web interface → Create a GraphRAG project](https://docs.arango.ai/agentic-ai-suite/graphrag/web-interface/)
+1. On the **Documents** step, click **Upload files** or **Upload folder** (or drag and drop onto the panel).
+2. Each upload becomes a **category** that you name. For this tutorial, upload the 11 runbook files and name the category `runbooks`.
 
----
+**Success signal:** the file list shows your documents grouped under the category, each marked **Pending**, with a total like "11 documents in this project." Click **Configure LLM** to continue.
 
-## Step 5 — Start the Importer and Retriever services **[UI ONLY]**
+### 4b: Configure
 
-Both services are configured from the **Project Settings** dialog. Open it either way:
+Choose the LLM provider used to build the Corpus Graph. These settings are fixed for this build; changing the provider or model later requires a rebuild.
 
-- In the **Data Sources** section → click **Add data source** → click **Open project settings**, **or**
-- In the **Graph** section → click the **gear icon**.
+1. **Provider** → **OpenAI**.
+2. **Model** → `gpt-5-mini` (this tutorial's chat model).
+3. **API key** → paste your key, or pick a stored secret. Leave **Use a separate key for embeddings** unchecked to use the same key for both.
+4. **Embedding model** → `text-embedding-3-small`.
+5. **Multimodal model** → Provider default.
+6. Click **Start build**.
 
-### 5a — Start importer service (OpenAI provider)
+**Success signal:** the panel confirms "Building from 11 documents across 1 category (runbooks)," and **Start build** deploys the AutoGraph service and begins the Corpus Graph build.
 
-1. In **Project Settings**, the importer configuration dialog is shown.
-2. **LLM API Provider** dropdown → select **OpenAI**.
-3. **Model** dropdown → pick your chat model (default is **GPT-5.4 Nano**).
-4. **OpenAI API Key** → paste your key (or click the key icon to pull a stored secret from Secrets Manager). The same key is used for both chat and embeddings on the OpenAI path.
-5. Click **Start importer service**.
+### 4c: Build
 
-**Success signal:** the Importer section shows the service as started/running; it now appears under **Agentic AI Suite → GraphRAG → <project>**, and (Step 6) `list_services` returns an `arangodb-graphrag-importer-<postfix>` entry with status `DEPLOYED`.
+1. The **Build** step shows **AutoGraph service deployed** with the **AutoGraph service ID** (for example `arangodb-autograph-pp7hk`) once the service is up.
+2. Click **Build Corpus Graph** to cluster the uploaded documents into the Corpus Graph.
 
-### 5b — Start retriever service (OpenAI provider)
+**Success signal:** the wizard finishes at the project overview. The **Context Graph** card shows the **Corpus Graph** (for example "11 documents · 1 cluster") with **Open in Graph Visualizer**, and the **Knowledge Graph** marked "Not built yet."
 
-1. Back in **Project Settings**, go to the Retriever section.
-2. **LLM API Provider** → **OpenAI**.
-3. **Model** → pick your model (default **GPT-5.4 Nano**).
-4. **OpenAI API Key** → paste (or select a Secrets Manager secret); used for both chat and embeddings.
-5. Click **Start retriever service**.
-
-**Success signal:** Retriever section shows started; `list_services` (Step 6) returns an `arangodb-graphrag-retriever-<postfix>` entry, status `DEPLOYED`.
-
-> **Note on OpenRouter:** if you ever switch the provider to OpenRouter, the UI asks for **two** keys — an OpenAI key (used for embeddings) plus an OpenRouter key (used for chat). On the plain OpenAI path one key covers both. Triton only shows up if a Triton Inference Server is deployed in the cluster.
-
-Docs: [GraphRAG web interface → Configure the Importer service / Configure the Retriever service](https://docs.arango.ai/agentic-ai-suite/graphrag/web-interface/) · [Importer quickstart](https://docs.arango.ai/agentic-ai-suite/importer/quickstart/) · [Retriever](https://docs.arango.ai/agentic-ai-suite/retriever/)
+Docs: [AutoGraph web interface](https://docs.arango.ai/agentic-ai-suite/autograph/)
 
 ---
 
-## Step 6 — Read back serviceIds / postfixes for scripting [CLI]
+## Step 5: Generate strategies and build the Knowledge Graph **[UI ONLY]**
 
-After the UI deploy, the data plane is fully scriptable. Re-run `list_services` to capture each service's `serviceId`, then derive the postfix.
+From the project overview, the Knowledge Graph is built in three sub-steps: **Configure → Review → Build**.
+
+1. On the **Knowledge Graph** card, click **Generate strategies**.
+2. **Configure strategy generation**: the complexity slider sets the starting GraphRAG / VectorRAG mix across the corpus (**Vector only** ↔ **Balanced graph** ↔ **Graph + images**). Higher complexity means richer entity extraction and higher cost; pick the setting you want and click **Generate strategies**.
+3. **Review strategies**: each category is grouped into a cluster with a RAG strategy and an ontology picked for it (for the runbooks corpus, one cluster with a GraphRAG strategy and an 11-type ontology). You can override a cluster's strategy or edit the ontology here. Click **Continue to build**.
+4. The build runs and populates the Knowledge Graph.
+
+**Success signal:** the **Context Graph** card's **Knowledge Graph** now shows entities and relationships (for example "test_kg, 278 entities · 923 relationships") with **Open in Graph Visualizer**. Entity and relationship counts vary by corpus, complexity setting, and model version.
+
+> **Retrievers.** Once the Knowledge Graph exists, the project overview's **Start using AutoRAG** section lets you **Deploy a retriever** to query it. A retriever answers questions against the Knowledge Graph, so there is nothing to query until the graph is built.
+
+Docs: [AutoGraph web interface](https://docs.arango.ai/agentic-ai-suite/autograph/)
+
+---
+
+## Step 6: Read back serviceIds / postfixes for scripting [CLI]
+
+After the wizard deploys the service, the data plane is scriptable. Re-run `list_services` to capture each service's `serviceId`, then derive the postfix. (The tutorial's `src/graphrag.py` does exactly this at runtime, so you normally never hardcode a postfix, so this section is for confirming the deploy and for ad-hoc scripting.)
 
 ```bash
 curl -s -X POST "$EP/_platform/acp/v1/list_services" \
@@ -127,7 +131,7 @@ You will see entries shaped like the ACP service-info object, e.g.:
 ```json
 {
   "serviceInfo": {
-    "serviceId": "arangodb-graphrag-importer-tm5i7",
+    "serviceId": "arangodb-autograph-pp7hk",
     "status": "DEPLOYED",
     "namespace": "arangodb-platform-dev"
   }
@@ -136,52 +140,50 @@ You will see entries shaped like the ACP service-info object, e.g.:
 
 ### Deriving `serviceIdPostfix`
 
-The **postfix is the trailing token of the `serviceId`** — the last `-`-delimited segment:
+The **postfix is the trailing token of the `serviceId`** (the last `-`-delimited segment):
 
 ```
-arangodb-graphrag-importer-tm5i7   →  tm5i7
+arangodb-autograph-pp7hk            →  pp7hk
 arangodb-graphrag-retriever-<xxxxx> →  <xxxxx>
 ```
 
 ```bash
-# Extract importer postfix programmatically
-IMPORTER_ID=$(curl -s -X POST "$EP/_platform/acp/v1/list_services" \
+# Extract the AutoGraph service postfix programmatically
+SERVICE_ID=$(curl -s -X POST "$EP/_platform/acp/v1/list_services" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' \
   | python3 -c 'import sys,json
 d=json.load(sys.stdin)
-import re
 print([s["serviceInfo"]["serviceId"] for s in (d if isinstance(d,list) else d.get("services",[]))
-       if "importer" in s["serviceInfo"]["serviceId"]][0])')
+       if "autograph" in s["serviceInfo"]["serviceId"]][0])')
 
-POSTFIX="${IMPORTER_ID##*-}"   # trailing token, e.g. tm5i7
+POSTFIX="${SERVICE_ID##*-}"   # trailing token, e.g. pp7hk
 echo "$POSTFIX"
 ```
 
-> Adjust the JSON walk to the actual `list_services` envelope (array vs. `{"services":[...]}`) once you see the live response — the postfix derivation rule (`${ID##*-}`) is what's load-bearing.
+> Adjust the JSON walk to the actual `list_services` envelope (array vs. `{"services":[...]}`) once you see the live response; the postfix derivation rule (`${ID##*-}`) is what's load-bearing.
 
-That `POSTFIX` is exactly what the data-plane import/query URLs need, e.g.:
+That `POSTFIX` is exactly what the data-plane control URLs need, e.g.:
 
 ```
-POST $EP/graphrag/importer/<POSTFIX>/v1/import
-POST $EP/graphrag/importer/<POSTFIX>/v1/import-multiple   # batch
+POST $EP/autograph/<POSTFIX>/v1/import-multiple   # batch import
 ```
 
 You can also confirm a single service's status directly:
 
 ```bash
-curl -s -X GET "$EP/_platform/acp/v1/service/$IMPORTER_ID" \
+curl -s -X GET "$EP/_platform/acp/v1/service/$SERVICE_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 **Success signal:** `status: "DEPLOYED"`. (`DEPLOYED` = installed; it may take a moment more to become ready to accept import/query traffic.)
 
-Docs: [Control Plane (ACP) → Listing services / Service status / serviceId response shape](https://docs.arango.ai/platform-suite/control-plane-acp/) · [Importer quickstart → call sequence + `:serviceIdPostfix` URLs](https://docs.arango.ai/agentic-ai-suite/importer/quickstart/)
+Docs: [Control Plane (ACP) → Listing services / Service status / serviceId response shape](https://docs.arango.ai/platform-suite/control-plane-acp/)
 
 ---
 
 ## Can any CLI deploy these services today?
 
-There **is** an official Arango command-line tool, but it does **not** wrap the ACP per-service install API, so it cannot replace the UI deploy on this pilot.
+There **is** an official Arango command-line tool, but it does **not** wrap the ACP per-service install API, so it cannot replace the wizard deploy on this pilot.
 
 ### The official tool: `arangodb_operator_platform` (the "Platform CLI")
 
@@ -195,42 +197,13 @@ Downloaded from the [kube-arangodb releases](https://github.com/arangodb/kube-ar
 | `package import` | Load that package into a container registry |
 | `package install` | Install the Platform Suite (web UI, base services) into the K8s namespace |
 
-None of these touch GraphRAG **Importer/Retriever** service instances. There is **no `arangodb_operator_platform service install graphragimporter`-style verb.** The tool stops at "the platform and its UI are running"; per-project AI services are deployed *through* the platform — i.e. via the ACP API or the UI. (There is no `oasisctl`/ArangoGraph-cloud path here either; oasisctl manages ArangoGraph Cloud deployments, not self-managed CDP 4.0 ACP services.)
+None of these touch the GraphRAG/AutoGraph service instances. The tool stops at "the platform and its UI are running"; per-project AI services are deployed *through* the platform, i.e. via the ACP API or the UI wizard. (There is no `oasisctl`/ArangoGraph-cloud path here either; oasisctl manages ArangoGraph Cloud deployments, not self-managed CDP ACP services.)
 
-Docs: [CDP install/upgrade (Platform CLI introduced)](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/) · [Offline setup — full `arangodb_operator_platform` command catalog](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/offline-setup/)
-
-### The intended CLI deploy path (currently blocked)
-
-The ACP REST API is the intended scriptable deploy surface:
-
-```bash
-# Intended full-CLI deploy call — currently returns
-# 400 "Project  not found" (blank project name) on this platform version.
-curl -s -X POST "$EP/_platform/acp/v1/graphragimporter" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "env": {
-      "db_name": "<db>",
-      "project_name": "<project>",
-      "chat_api_provider": "openai",
-      "chat_api_url": "https://api.openai.com/v1",
-      "embedding_api_provider": "openai",
-      "embedding_api_url": "https://api.openai.com/v1",
-      "chat_model": "gpt-5.4-nano",
-      "embedding_model": "text-embedding-3-small",
-      "chat_api_key": "<openai-key>",
-      "embedding_api_key": "<openai-key>",
-      "embedding_dim": "512"
-    }
-  }'
-```
-
-The body above is schema-correct per the ACP docs, and the named project reads back fine via `GET /_platform/acp/v1/project_by_name/<db>/<project>`. The `400 "Project  not found"` with a **blank** project name indicates a server-side issue where the install handler does not resolve `env.project_name` on this platform version. Once resolved, this path allows the entire deploy (project create → importer install → retriever install) to be scripted end-to-end from CLI, removing the UI step.
+Docs: [CDP install/upgrade (Platform CLI introduced)](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/) · [Offline setup: full `arangodb_operator_platform` command catalog](https://docs.arango.ai/contextual-data-platform/install-and-upgrade/offline-setup/)
 
 ---
 
-### Quick reference — endpoints used
+### Quick reference: endpoints used
 
 | Action | Method + Path | Tag |
 | --- | --- | --- |
@@ -238,8 +211,7 @@ The body above is schema-correct per the ACP docs, and the named project reads b
 | ACP health | `GET /_platform/acp/v1/health` | CLI |
 | List services | `POST /_platform/acp/v1/list_services` (body `{}`) | CLI |
 | Get one service status | `GET /_platform/acp/v1/service/{serviceId}` | CLI |
-| Create project | UI: Agentic AI Suite → Run GraphRAG → Add new project | UI ONLY |
-| Start importer | UI: Project Settings → Start importer service | UI ONLY |
-| Start retriever | UI: Project Settings → Start retriever service | UI ONLY |
-| Submit import | `POST /graphrag/importer/{postfix}/v1/import` | CLI (after deploy) |
-| (Blocked) API deploy importer | `POST /_platform/acp/v1/graphragimporter` → 400 bug | — |
+| Create project + deploy service | UI: Agentic AI Suite → AutoGraph Studio → Documents → Configure → Build | UI ONLY |
+| Build Corpus Graph | UI: Build step → Build Corpus Graph | UI ONLY |
+| Generate strategies + build Knowledge Graph | UI: Generate strategies → Review → Continue to build | UI ONLY |
+| Submit import | `POST /autograph/{postfix}/v1/import-multiple` | CLI (after deploy) |
