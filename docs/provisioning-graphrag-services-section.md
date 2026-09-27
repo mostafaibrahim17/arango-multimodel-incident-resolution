@@ -1,6 +1,6 @@
 # Provisioning the Project and Deploying the GraphRAG Services
 
-> **Environment:** Arango Contextual Data Platform pilot at `https://your-deployment.arango.ai` (Arango engine Enterprise, gateway on port `8529`). Root auth, JWT obtained via `POST /_open/auth`.
+> **Environment:** Arango Contextual Data Platform pilot at `https://your-deployment.arango.ai` (Arango engine Enterprise, gateway on port `8529`). Authenticates with an Arango user account, JWT obtained via `POST /_open/auth`.
 
 Throughout, `$EP` is the external endpoint:
 
@@ -12,12 +12,12 @@ EP="https://your-deployment.arango.ai"
 
 ## Step 1: Get a JWT [CLI]
 
-The ACP API authenticates with a standard Arango **user** JWT (not a superuser token), generated from the Arango auth endpoint.
+The ACP API authenticates with a standard Arango **user** JWT (not a superuser token), generated from the Arango auth endpoint. Use the same `ARANGO_USER` / `ARANGO_PASSWORD` as your `.env`.
 
 ```bash
 TOKEN=$(curl -s -X POST "$EP/_open/auth" \
   -H "Content-Type: application/json" \
-  -d '{"username": "root", "password": "<ROOT_PASSWORD>"}' \
+  -d '{"username": "<ARANGO_USER>", "password": "<ARANGO_PASSWORD>"}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["jwt"])')
 
 echo "$TOKEN" | cut -c1-20   # sanity check: prints the first chars of a JWT
@@ -107,7 +107,7 @@ From the project overview, the Knowledge Graph is built in three sub-steps: **Co
 3. **Review strategies**: each category is grouped into a cluster with a RAG strategy and an ontology picked for it (for the runbooks corpus, one cluster with a GraphRAG strategy and an 11-type ontology). You can override a cluster's strategy or edit the ontology here. Click **Continue to build**.
 4. The build runs and populates the Knowledge Graph.
 
-**Success signal:** the **Context Graph** card's **Knowledge Graph** now shows entities and relationships (for example "test_kg, 278 entities · 923 relationships") with **Open in Graph Visualizer**. Entity and relationship counts vary by corpus, complexity setting, and model version.
+**Success signal:** the **Context Graph** card's **Knowledge Graph** now shows the built graph with an entity and relationship count and an **Open in Graph Visualizer** link. Exact counts vary by corpus, complexity setting, and model version.
 
 > **Retrievers.** Once the Knowledge Graph exists, the project overview's **Start using AutoRAG** section lets you **Deploy a retriever** to query it. A retriever answers questions against the Knowledge Graph, so there is nothing to query until the graph is built.
 

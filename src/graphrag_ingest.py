@@ -7,9 +7,11 @@ Most of the pipeline is scriptable over the documented REST API; the final entit
     health -> import-multiple (per module) -> corpus/builds -> rag-strategizer/analyze    [scriptable]
     -> orchestrate (the final entity build)                                                [UI step]
 
-Two steps stay in the web UI (same pattern as deploying the Importer/Retriever): (1) create the
-AutoGraph PROJECT once -- that deploys the `arangodb-autograph-<pf>` control service + the project's
-retriever; (2) click "Continue to build" to run orchestration. The REST POST /orchestrate returns
+Two steps stay in the web UI: (1) create the AutoGraph PROJECT through the wizard (Documents ->
+Configure -> Build) -- that deploys the `arangodb-autograph-<pf>` service and builds the Corpus
+Graph; (2) from the project overview, generate strategies and click "Continue to build" to build
+the Knowledge Graph. The Retriever is deployed separately afterwards from the project overview
+("Deploy a retriever"). The REST POST /orchestrate returns
 `{"totalJobs": 0}` and builds nothing on this platform version (verified on a clean slate), so the
 final entity build is a UI click. Everything else (import, corpus build, the GraphRAG strategizer)
 runs here. The control plane lives at `{HOST}/autograph/{postfix}/v1` (postfix discovered at runtime).
@@ -94,7 +96,7 @@ def import_runbooks(module="default"):
     """Import every data/runbooks/**/*.md into AutoGraph as ONE module.
 
     The validated build imports the whole corpus as a single module so the RAG Strategizer sees one
-    incident-response domain and assigns it GraphRAG (a single entity-rich partition).
+    incident-response domain and assigns it GraphRAG (a single entity-rich cluster).
     Splitting into per-folder modules makes AutoGraph cluster each separately and can downgrade the
     smaller ones to VectorRAG -- not what we want here.
     """

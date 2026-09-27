@@ -46,8 +46,8 @@ A single AQL query (the "marquee") resolves the vector recall of similar inciden
 affected-service subgraph, and the on-call owner in one round trip, with no application-side
 joins. The agent (`src/resolver.py`) then uses the **precise** root service from that query to
 ground the answer in that service's exact runbook, and a **semantic** Retriever pass (Unified
-Search) to add the related runbooks across the incident's blast radius. Precise scope, grounded
-context.
+Search, `query_type 3` in the API; Instant Search in the UI) to add the related runbooks across
+the incident's blast radius. Precise scope, grounded context.
 
 ## The hero alert
 
@@ -177,27 +177,43 @@ hardcoded.
 
 ## Running the pipeline
 
-The notebook `incident_resolution.ipynb` runs the whole thing, importing the same functions from
-`src/` so nothing is duplicated. Or run the scripts directly:
+The runbook knowledge graph is built once through the AutoGraph web UI; the multimodel core and
+the resolver run from the scripts (or the notebook). In order:
+
+**1. Build the multimodel core.**
 
 ```bash
-python src/ingest.py                            # 1. multimodel core: 500 incidents + 8 alerts + topology
-python src/graphrag_ingest.py                   # 2. build the runbook KG with AutoGraph (skip-if-built; --reset to rebuild)
-python src/resolver.py data/alert.sample.json   # 3. one alert -> structured payload + cited, grounded answer
-python src/run_all.py                           # or the whole pipeline at once
+python src/ingest.py   # 500 incidents + 8 alerts + service topology in incident_demo
 ```
 
-The [AutoGraph](https://docs.arango.ai/agentic-ai-suite/autograph/) service is deployed by
-creating the AutoGraph project through the platform web UI wizard (Documents, Configure, Build):
-you upload the runbooks as a category, choose the chat and embedding models, and start the build,
-which deploys the service and builds the Corpus Graph. From the project overview you then generate
-strategies, review the per-cluster strategy and ontology, and click **Continue to build** to build
-the Knowledge Graph. The import and corpus steps are also scriptable over the documented
+**2. Build the runbook knowledge graph (AutoGraph web UI).** Create an AutoGraph project through
+the wizard (Documents, Configure, Build): upload the 11 runbooks in `data/runbooks/` as a
+category, choose the chat and embedding models, and start the build, which deploys the AutoGraph
+service and builds the Corpus Graph. From the project overview, generate strategies, review the
+per-cluster strategy and ontology, and click **Continue to build** to build the Knowledge Graph.
+See `docs/` for the full walkthrough.
+
+The import, corpus, and strategizer steps are also scriptable over the documented
 [AutoGraph REST API](https://docs.arango.ai/agentic-ai-suite/autograph/reference/) via
-`graphrag_ingest.py` (`import-multiple`, `corpus/builds`, `rag-strategizer`), where AutoGraph
-discovers the domains and assigns per-domain retrieval treatment automatically. Service postfixes
-are discovered at runtime (`src/graphrag.py`), never hardcoded. The cited answer uses the
-Retriever's Unified Search.
+`python src/graphrag_ingest.py` (skip-if-built; `--reset` to rebuild). Use the wizard **or** the
+script for a given project, not both, since each imports the corpus. The wizard is the path this
+tutorial follows.
+
+**3. Deploy a Retriever.** Once the Knowledge Graph exists, deploy a Retriever from the project
+overview (**Deploy a retriever**). The resolver queries it for the cited answer, so this must be
+running before step 4. Its service postfix is discovered at runtime (`src/graphrag.py`), so no
+service ID is hardcoded.
+
+**4. Resolve an alert.**
+
+```bash
+python src/resolver.py data/alert.sample.json   # one alert -> structured payload + cited, grounded answer
+python src/run_all.py                           # or the whole pipeline (core + resolve) at once
+```
+
+The notebook `incident_resolution.ipynb` walks the same flow, importing the same functions from
+`src/`. The cited answer uses the Retriever's Unified Search (`query_type 3` in the API; the web
+UI exposes the equivalent as Instant Search, alongside Deep Search for a multi-step answer).
 
 ## Models
 
@@ -210,7 +226,7 @@ ingest and query sides, so the vector spaces match. The agent's reasoning uses `
 - Multimodel core ✅
 - AutoGraph runbook knowledge graph ✅: import, corpus build, and strategizer run via the
   AutoGraph REST API; the Knowledge Graph is built from the project overview in the UI.
-- Cited, grounded combined resolver ✅: Unified Search + content grounding; all 8 demo alerts
+- Cited, grounded combined resolver ✅: Unified Search (the API's `query_type 3`, shown as Instant Search in the UI) + content grounding; all 8 demo alerts
   grounded on the correct runbook and corroborated.
 
 ## Attribution
