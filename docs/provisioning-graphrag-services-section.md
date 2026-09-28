@@ -105,11 +105,11 @@ From the project overview, the Knowledge Graph is built in three sub-steps: **Co
 1. On the **Knowledge Graph** card, click **Generate strategies**.
 2. **Configure strategy generation**: the complexity slider sets the starting GraphRAG / VectorRAG mix across the corpus (**Vector only** ↔ **Balanced graph** ↔ **Graph + images**). Higher complexity means richer entity extraction and higher cost; pick the setting you want and click **Generate strategies**.
 3. **Review strategies**: each category is grouped into a cluster with a RAG strategy and an ontology picked for it (for the runbooks corpus, one cluster with a GraphRAG strategy and an 11-type ontology). You can override a cluster's strategy or edit the ontology here. Click **Continue to build**.
-4. The build runs and populates the Knowledge Graph.
+4. **Build**: the final sub-step opens. Set **Parallel builds** (default `1`; more parallel builds finish faster but put more load on the service), then click **Build Knowledge Graph** to start it. The screen confirms the scope, e.g. "Building 1 GraphRAG cluster and 0 VectorRAG clusters." When it finishes, a **Knowledge Graph built** confirmation appears; click **Go to overview**.
 
 **Success signal:** the **Context Graph** card's **Knowledge Graph** now shows the built graph with an entity and relationship count and an **Open in Graph Visualizer** link. Exact counts vary by corpus, complexity setting, and model version.
 
-> **Retrievers.** Once the Knowledge Graph exists, the project overview's **Start using AutoRAG** section lets you **Deploy a retriever** to query it. A retriever answers questions against the Knowledge Graph, so there is nothing to query until the graph is built.
+> **Retrievers.** Once the Knowledge Graph exists, the project overview's **Start using AutoRAG** section lets you **Deploy a retriever** to query it. **Deploy a retriever** opens a form to choose the chat provider, chat model, and chat API key; the embedding provider and model are **locked to match the corpus build** (only the embedding key is editable), so query embeddings align with the ones used at import. A retriever answers questions against the Knowledge Graph, so there is nothing to query until the graph is built.
 
 Docs: [AutoGraph web interface](https://docs.arango.ai/agentic-ai-suite/autograph/)
 
@@ -126,15 +126,17 @@ curl -s -X POST "$EP/_platform/acp/v1/list_services" \
   -d '{}' | python3 -m json.tool
 ```
 
-You will see entries shaped like the ACP service-info object, e.g.:
+`list_services` returns an object with a `services` array. Each entry carries `serviceId` directly, alongside `serviceMeta` and `serviceType` — there is **no** `serviceInfo` wrapper on this endpoint:
 
 ```json
 {
-  "serviceInfo": {
-    "serviceId": "arangodb-autograph-pp7hk",
-    "status": "DEPLOYED",
-    "namespace": "arangodb-platform-dev"
-  }
+  "services": [
+    {
+      "serviceMeta": { "...": "..." },
+      "serviceType": "...",
+      "serviceId": "arangodb-autograph-auxwm"
+    }
+  ]
 }
 ```
 
@@ -143,7 +145,7 @@ You will see entries shaped like the ACP service-info object, e.g.:
 The **postfix is the trailing token of the `serviceId`** (the last `-`-delimited segment):
 
 ```
-arangodb-autograph-pp7hk            →  pp7hk
+arangodb-autograph-auxwm            →  auxwm
 arangodb-graphrag-retriever-<xxxxx> →  <xxxxx>
 ```
 
@@ -153,14 +155,11 @@ SERVICE_ID=$(curl -s -X POST "$EP/_platform/acp/v1/list_services" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' \
   | python3 -c 'import sys,json
 d=json.load(sys.stdin)
-print([s["serviceInfo"]["serviceId"] for s in (d if isinstance(d,list) else d.get("services",[]))
-       if "autograph" in s["serviceInfo"]["serviceId"]][0])')
+print([s["serviceId"] for s in d["services"] if "autograph" in s["serviceId"]][0])')
 
-POSTFIX="${SERVICE_ID##*-}"   # trailing token, e.g. pp7hk
+POSTFIX="${SERVICE_ID##*-}"   # trailing token, e.g. auxwm
 echo "$POSTFIX"
 ```
-
-> Adjust the JSON walk to the actual `list_services` envelope (array vs. `{"services":[...]}`) once you see the live response; the postfix derivation rule (`${ID##*-}`) is what's load-bearing.
 
 That `POSTFIX` is exactly what the data-plane control URLs need, e.g.:
 
@@ -168,14 +167,30 @@ That `POSTFIX` is exactly what the data-plane control URLs need, e.g.:
 POST $EP/autograph/<POSTFIX>/v1/import-multiple   # batch import
 ```
 
-You can also confirm a single service's status directly:
+You can also confirm a single service's status directly. Unlike `list_services`, this endpoint **does** wrap its response in a `serviceInfo` object:
 
 ```bash
 curl -s -X GET "$EP/_platform/acp/v1/service/$SERVICE_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+```json
+{
+  "serviceInfo": {
+    "serviceId": "arangodb-autograph-auxwm",
+    "description": "Install complete",
+    "status": "DEPLOYED",
+    "namespace": "arangodb-platform-rnd-<deployment>",
+    "dbName": "incident_demo",
+    "managingEntity": "ACP",
+    "genaiProjectName": "Incidents-runbook-autograph"
+  }
+}
+```
+
 **Success signal:** `status: "DEPLOYED"`. (`DEPLOYED` = installed; it may take a moment more to become ready to accept import/query traffic.)
+
+> Both curl calls need `$EP` and `$TOKEN` set in the current shell. These do **not** carry across terminal tabs/windows — in a fresh shell, re-set `$EP` and re-mint `$TOKEN` (Step 1) first, or the call returns an empty body and `json.tool` errors with `Expecting value: line 1 column 1`.
 
 Docs: [Control Plane (ACP) → Listing services / Service status / serviceId response shape](https://docs.arango.ai/platform-suite/control-plane-acp/)
 
@@ -213,5 +228,5 @@ Docs: [CDP install/upgrade (Platform CLI introduced)](https://docs.arango.ai/con
 | Get one service status | `GET /_platform/acp/v1/service/{serviceId}` | CLI |
 | Create project + deploy service | UI: Agentic AI Suite → AutoGraph Studio → Documents → Configure → Build | UI ONLY |
 | Build Corpus Graph | UI: Build step → Build Corpus Graph | UI ONLY |
-| Generate strategies + build Knowledge Graph | UI: Generate strategies → Review → Continue to build | UI ONLY |
+| Generate strategies + build Knowledge Graph | UI: Generate strategies → Review → Continue to build → Build Knowledge Graph | UI ONLY |
 | Submit import | `POST /autograph/{postfix}/v1/import-multiple` | CLI (after deploy) |
