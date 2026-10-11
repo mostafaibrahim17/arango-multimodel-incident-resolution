@@ -7,4 +7,11 @@ runlog/
 # Superseded cleared notebook copy — one executed notebook ships; kept locally, excluded from the repo
 incident_resolution.colab.ipynb
 
+# Local-only manual checks (need a live deployment; not shipped)
+check_retriever_fallback.py
+check_corroboration.py
+check_rules_fallback.py
 .DS_Store
+
+# Python virtual environment
+.venv/

@@ -1,7 +1,13 @@
-"""Create the schema, ingest + embed synthetic-servicenow tickets, and build the service topology.
+"""Create the schema, ingest and embed the incident corpus, and build the service topology.
 
-One multimodel store: a document collection of incidents (with vector-indexed embeddings),
-a named graph of service dependencies, and a key-value style teams collection.
+One multimodel store backs the whole pipeline:
+  - a document collection of incidents with vector-indexed embeddings (similarity recall),
+  - a named graph of service dependencies (traversal),
+  - key-value collections for service health and on-call teams (lookups),
+  - a collection of live alerts, also embedded.
+
+Service health is stored per scenario: each incident scenario has its own snapshot of which
+services are degraded, so an alert is resolved against the health state of its own scenario.
 """
 import json
 import os
@@ -45,7 +51,8 @@ def main():
     db = connect()
     topo = json.load(open("data/topology.json"))
 
-    # Schema: drop + recreate so the script is idempotent.
+    # Drop and recreate the collections and graph so the script is idempotent:
+    # re-running it always leaves the store in the same state.
     if db.has_graph("service_topology"):
         db.delete_graph("service_topology")
     for c in ["incidents", "services", "teams", "alerts", "service_depends_on", "service_health"]:
@@ -63,55 +70,81 @@ def main():
         to_vertex_collections=["services"],
     )
 
-    # Curated topology + on-call teams (graph + key-value).
+    # Service topology and on-call teams: the graph vertices/edges and the key-value team records.
     services.insert_many([{"_key": k, **v} for k, v in topo["services"].items()])
     teams.insert_many([{"_key": k, **v} for k, v in topo["teams"].items()])
     db.collection("service_depends_on").insert_many(
         [{"_from": f"services/{a}", "_to": f"services/{b}"} for a, b in topo["depends_on"]]
     )
 
-    # Service health: current status of each service, used by the reasoning layer to pivot root cause.
+    # Service health, per scenario. service_signals.json maps each scenario to the services that
+    # are degraded in it. For every scenario, every service in the topology gets a health row
+    # (default healthy), and the services named in that scenario override with their status and
+    # detail. Rows are keyed `<scenario>__<service>` so the resolver can look up the health state
+    # for the scenario the alert belongs to. The reasoning layer reads these to decide whether to
+    # pivot the root cause to a degraded dependency.
+    signals = json.load(open("data/service_signals.json"))
     service_health = db.create_collection("service_health")
-    service_health.insert_many([
-        {"_key": "onboarding-api",       "status": "healthy",  "note": "responding normally"},
-        {"_key": "document-service",     "status": "degraded", "note": "high latency on /generate-envelope"},
-        {"_key": "merchant-service",     "status": "healthy",  "note": ""},
-        {"_key": "notification-service", "status": "healthy",  "note": ""},
-        {"_key": "payment-gateway",      "status": "healthy",  "note": ""},
-        {"_key": "auth-service",         "status": "healthy",  "note": ""},
-        {"_key": "user-db",              "status": "healthy",  "note": ""},
-        {"_key": "merchant-db",          "status": "healthy",  "note": ""},
-        {"_key": "network-gateway",      "status": "healthy",  "note": ""},
-        {"_key": "api-gateway",          "status": "healthy",  "note": ""},
-        {"_key": "web-portal",           "status": "healthy",  "note": ""},
-        {"_key": "analytics-service",    "status": "healthy",  "note": ""},
-    ])
+    health_rows = []
+    for scenario, degraded_map in signals.items():
+        for svc in topo["services"]:
+            sig = degraded_map.get(svc, {})
+            health_rows.append({
+                "_key": f"{scenario}__{svc}",
+                "scenario": scenario,
+                "service": svc,
+                "status": sig.get("status", "healthy"),
+                "note": sig.get("detail", ""),
+            })
+    service_health.insert_many(health_rows)
 
-    # Tickets: load the dataset, embed short_description + description, store with resolution.
     oai = OpenAI()
+
+    # Incident corpus: the public dataset provides breadth, and the scenario seed incidents provide
+    # the domain-specific cases the alerts are meant to recall. Both share one schema and carry a
+    # `service`; the dataset rows derive theirs from the category map, the seeds carry theirs
+    # directly. They are embedded and indexed together as a single corpus.
     ds = load_dataset(DATASET, split="train")
     cat2svc = topo["category_to_service"]
-    texts = [f'{r["short_description"]} {r["description"]}' for r in ds]
+    seeds = json.load(open("data/seed_incidents.json"))
+
+    ds_records = [
+        {
+            "_key": r["number"],
+            "short_description": r["short_description"],
+            "description": r["description"],
+            "resolution": r["resolution"],
+            "category": r["category"],
+            "assignment_group": r["assignment_group"],
+            "urgency": r["urgency"],
+            "impact": r["impact"],
+            "service": cat2svc.get(r["category"], "unknown"),
+        }
+        for r in ds
+    ]
+    seed_records = [
+        {
+            "_key": s["_key"],
+            "short_description": s["short_description"],
+            "description": s["description"],
+            "resolution": s["resolution"],
+            "category": s.get("category", ""),
+            "assignment_group": s.get("assignment_group", ""),
+            "urgency": s.get("urgency", ""),
+            "impact": s.get("impact", ""),
+            "service": s["service"],
+        }
+        for s in seeds
+    ]
+    all_records = ds_records + seed_records
+
+    texts = [f'{r["short_description"]} {r["description"]}' for r in all_records]
     vectors = embed(oai, texts)
     incidents.insert_many(
-        [
-            {
-                "_key": r["number"],
-                "short_description": r["short_description"],
-                "description": r["description"],
-                "resolution": r["resolution"],
-                "category": r["category"],
-                "assignment_group": r["assignment_group"],
-                "urgency": r["urgency"],
-                "impact": r["impact"],
-                "service": cat2svc.get(r["category"], "onboarding-api"),
-                "embedding": v,
-            }
-            for r, v in zip(ds, vectors)
-        ]
+        [{**rec, "embedding": v} for rec, v in zip(all_records, vectors)]
     )
 
-    # Vector index is created after the data loads so it trains on the full set.
+    # Build the vector index after the documents are loaded, so it trains on the full corpus.
     incidents.add_index(
         {
             "name": "incidents_vec",
@@ -121,22 +154,17 @@ def main():
         }
     )
 
-    # Alerts: the third data shape -- live alerts, stored + embedded so they are queryable too.
+    # Alerts: stored for reference. They are not vector-searched, the resolver embeds each alert's
+    # text at query time, so no alert embedding or vector index is built here. (An earlier version
+    # built an `alerts_vec` index that nothing ever queried.)
     alert_docs = json.load(open("data/alerts.json"))
-    alert_vecs = embed(oai, [a["text"] for a in alert_docs])
-    alerts.insert_many([{**a, "embedding": v} for a, v in zip(alert_docs, alert_vecs)])
-    alerts.add_index(
-        {
-            "name": "alerts_vec",
-            "type": "vector",
-            "fields": ["embedding"],
-            "params": {"metric": "cosine", "dimension": EMBED_DIM, "nLists": 2},
-        }
-    )
+    alerts.insert_many(alert_docs)
 
     print(
-        f"ingested {incidents.count()} incidents, {alerts.count()} alerts, {services.count()} services, "
-        f"{teams.count()} teams, {len(topo['depends_on'])} dependency edges"
+        f"ingested {incidents.count()} incidents ({len(seed_records)} seeded), "
+        f"{alerts.count()} alerts, {services.count()} services, "
+        f"{teams.count()} teams, {len(topo['depends_on'])} dependency edges, "
+        f"{service_health.count()} health rows across {len(signals)} scenarios"
     )
 
 

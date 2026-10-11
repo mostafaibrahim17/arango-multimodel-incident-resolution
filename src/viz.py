@@ -1,8 +1,9 @@
 """Render the figures for the README + notebook from real data. Saves PNGs to assets/.
 
   assets/architecture.png      -- the two-surfaces-one-platform schematic
-  assets/affected-subgraph.png -- the real affected-service subgraph for the sample alert
+  assets/affected-subgraph.png -- the real cause-side dependency subgraph for the sample alert
   assets/knowledge-graph.png   -- a sample of the AutoGraph knowledge graph (entities + relations)
+  assets/results.png           -- one bar per alert, colored by whether the root cause was correct
 """
 import json
 import os
@@ -17,6 +18,7 @@ from graphrag import GRAPHRAG_PROJECT, kg_db
 
 os.makedirs("assets", exist_ok=True)
 GREEN, TEAL, NAVY, AMBER = "#7cc24a", "#3aa6a6", "#1f3a5f", "#e08a3c"
+RED = "#d94e3a"
 
 
 def _box(ax, x, y, w, h, text, fc, fs=10, tc="white"):
@@ -32,10 +34,10 @@ def fig_architecture():
     ax.axis("off")
     _box(ax, 0.2, 2.1, 1.6, 1.0, "Live alert\n(JSON)", AMBER, 10)
     _box(ax, 2.3, 0.3, 4.4, 4.6, "Arango Contextual Data Platform", NAVY, 12, "white")
-    _box(ax, 2.6, 2.7, 3.8, 1.8, "Multimodel core  (incident_demo)\n\nincidents + vector index\nservice topology (graph)\nteams (key-value) + alerts", TEAL, 9)
+    _box(ax, 2.6, 2.7, 3.8, 1.8, "Multimodel core  (incident_demo)\n\nincidents + vector index\nservice topology (graph)\nteams + health (key-value) + alerts", TEAL, 9)
     _box(ax, 2.6, 0.6, 3.8, 1.8, "AutoGraph knowledge graph\n(runbooks)\n\nrunbooks -> entities,\nrelations, communities", GREEN, 9)
     _box(ax, 7.2, 2.1, 1.7, 1.0, "Agent\n(resolver.py)", "#444", 10)
-    _box(ax, 9.1, 3.0, 1.7, 1.6, "Structured payload\nsimilar + affected\n+ on-call", TEAL, 8)
+    _box(ax, 9.1, 3.0, 1.7, 1.6, "Structured payload\ncauses + impact\n+ on-call", TEAL, 8)
     _box(ax, 9.1, 0.6, 1.7, 1.6, "Cited answer\ngrounded in\nrunbooks", GREEN, 8)
     for x0, y0, x1, y1 in [(1.8, 2.6, 2.6, 2.6), (6.4, 3.4, 7.2, 2.8), (6.4, 1.4, 7.2, 2.4),
                            (8.9, 2.8, 9.1, 3.6), (8.9, 2.4, 9.1, 1.4)]:
@@ -49,26 +51,45 @@ def fig_architecture():
 
 
 def fig_affected_subgraph(alert_path="data/alert.sample.json"):
+    """The cause-side dependency subgraph the resolver searched for one alert: the services the
+    alerting service depends on (`possible_causes`), colored by health, with the DECIDED root cause
+    marked in red. After a pivot the root cause is not the depth-0 alerting service, so the root is
+    highlighted explicitly rather than by depth (the old version reddened depth-0, which was the
+    alerting service, not the cause)."""
     from resolver import resolve
     payload = resolve(json.load(open(alert_path)))
-    affected = {a["service"]: a for a in payload["affected_services"]}
+    causes = {c["service"]: c for c in payload["possible_causes"]}
+    root = payload["root_service"]
+    alerting = next((c["service"] for c in payload["possible_causes"] if c["depth"] == 0), root)
     topo = json.load(open("data/topology.json"))
     names = {k: v["name"] for k, v in topo["services"].items()}
+
     G = nx.DiGraph()
-    for a in affected:
-        G.add_node(a)
+    for s in causes:
+        G.add_node(s)
     for fr, to in topo["depends_on"]:
-        if fr in affected and to in affected:
+        if fr in causes and to in causes:
             G.add_edge(fr, to)
-    depth = {k: v["depth"] for k, v in affected.items()}
+
+    # Decided root in red; other degraded dependencies in amber; healthy services by depth.
+    def _color(n):
+        if n == root:
+            return RED
+        if causes[n].get("status") == "degraded":
+            return AMBER
+        return [TEAL, GREEN, "#9ccb6a"][min(causes[n]["depth"], 2)]
+
+    colors = [_color(n) for n in G.nodes]
     pos = nx.spring_layout(G, seed=7, k=1.2)
-    colors = [["#d94e3a", TEAL, GREEN, "#9ccb6a"][min(depth[n], 3)] for n in G.nodes]
     plt.figure(figsize=(9, 6))
     nx.draw_networkx_edges(G, pos, edge_color="#bbb", arrows=True, arrowsize=14, width=1.4)
     nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=2200, edgecolors="white")
     nx.draw_networkx_labels(G, pos, {n: names.get(n, n) for n in G.nodes}, font_size=8)
-    plt.title(f"Affected-service subgraph for an alert on {payload['root_service']}  "
-              f"(root in red, by blast-radius depth)", fontsize=11)
+    pivoted = root != alerting
+    subtitle = (f"alert on {names.get(alerting, alerting)}  ->  root cause {names.get(root, root)}"
+                + ("  (pivoted)" if pivoted else ""))
+    plt.title(f"Cause-side dependency subgraph\n{subtitle}\n"
+              f"red = decided root cause   ·   amber = degraded dependency", fontsize=10)
     plt.axis("off")
     plt.tight_layout()
     plt.savefig("assets/affected-subgraph.png", dpi=130, bbox_inches="tight")
@@ -125,7 +146,7 @@ def fig_kg_sample():
     nx.draw_networkx_nodes(G, pos, nodelist=[n for n in G.nodes if not is_doc[n] and n not in bridge],
                            node_color=TEAL, node_size=90, alpha=0.8, edgecolors="white", linewidths=0.4)
     nx.draw_networkx_nodes(G, pos, nodelist=[n for n in bridge],
-                           node_color="#d94e3a", node_size=180, edgecolors="white", linewidths=0.6)
+                           node_color=RED, node_size=180, edgecolors="white", linewidths=0.6)
     nx.draw_networkx_nodes(G, pos, nodelist=docs, node_color=NAVY, node_shape="s",
                            node_size=[700 + 120 * deg[d] for d in docs], edgecolors="white")
     nx.draw_networkx_labels(G, pos, {d: d.replace(".md", "") for d in docs}, font_size=7,
@@ -143,14 +164,16 @@ def fig_kg_sample():
 
 
 def fig_results_from_rows(rows):
-    """The results showcase: one bar per alert (multimodel-query latency), colored by whether it
-    grounded on the correct runbook, titled with the grounded/corroborated tally. Precomputed rows
-    so the notebook can evaluate once and reuse them here. -> assets/results.png"""
+    """The results showcase: one bar per alert (multimodel-query latency), colored by whether the
+    decided root cause was correct (green) or wrong (red), titled with the correct / runbook-found /
+    corroborated tallies. Precomputed rows so the notebook can evaluate once and reuse them here.
+    -> assets/results.png"""
     labels = [f"{r['alert']}  ·  {r['service']}" for r in rows]
     query_ms = [r["query_ms"] for r in rows]
-    bar_colors = [GREEN if r["grounded"] else "#d94e3a" for r in rows]
-    grounded = sum(r["grounded"] for r in rows)
-    corroborated_count = sum(r["corroborated"] for r in rows)
+    bar_colors = [GREEN if r.get("correct") else RED for r in rows]
+    correct = sum(1 for r in rows if r.get("correct"))
+    runbook_found = sum(1 for r in rows if r.get("runbook_found"))
+    corroborated_count = sum(1 for r in rows if r.get("corroborated"))
     total = len(rows)
     positions = list(range(total))
 
@@ -161,13 +184,15 @@ def fig_results_from_rows(rows):
     plt.xlabel("multimodel query — structured payload, one AQL round trip (ms)")
     for position, ms in zip(positions, query_ms):
         plt.text(ms + max(query_ms) * 0.01, position, f"{ms:.0f} ms", va="center", fontsize=7, color="#555")
-    plt.title(f"{grounded}/{total} grounded on the correct runbook   ·   "
+    plt.title(f"{correct}/{total} correct root cause   ·   "
+              f"{runbook_found}/{total} runbook found   ·   "
               f"{corroborated_count}/{total} corroborated   ·   "
-              f"vector + graph + key-value in one round trip", fontsize=11)
+              f"vector + graph + key-value in one round trip", fontsize=10)
     plt.tight_layout()
     plt.savefig("assets/results.png", dpi=130, bbox_inches="tight")
     plt.close()
-    print(f"wrote assets/results.png ({grounded}/{total} grounded, {corroborated_count}/{total} corroborated)")
+    print(f"wrote assets/results.png ({correct}/{total} correct, {runbook_found}/{total} runbook found, "
+          f"{corroborated_count}/{total} corroborated)")
 
 
 def fig_results(alerts_path="data/alerts.json"):

@@ -1,27 +1,19 @@
 {
-  "user-db": {
-    "status": "degraded",
-    "detail": "read_replica_lag 8.4s after primary failover 14m ago",
-    "observed_min_ago": 14
+  "udb-lag": {
+    "user-db": {"status": "degraded", "detail": "read_replica_lag 8.4s after primary failover 14m ago; stale permission reads for auth and merchant lookups"},
+    "document-service": {"status": "degraded", "detail": "pdf_render_latency elevated to 1.7s; render workers at 82% utilization"}
   },
-  "merchant-service": {
-    "status": "healthy",
-    "detail": "nominal; p99 within SLO",
-    "observed_min_ago": 2
+  "pg-timeout": {
+    "payment-gateway": {"status": "degraded", "detail": "processor timeouts; card declines above 6%; settlement reconciliation falling behind"}
   },
-  "onboarding-api": {
-    "status": "healthy",
-    "detail": "nominal; 5xx at baseline",
-    "observed_min_ago": 1
+  "ng-egress": {
+    "network-gateway": {"status": "degraded", "detail": "egress saturation near the ceiling; outbound timeouts to external endpoints"}
   },
-  "document-service": {
-    "status": "healthy",
-    "detail": "nominal; render workers under 60% util",
-    "observed_min_ago": 3
+  "doc-render": {
+    "document-service": {"status": "degraded", "detail": "PDF render workers saturated; envelope latency above 2s with 502s"}
   },
-  "auth-service": {
-    "status": "healthy",
-    "detail": "nominal; login p99 within SLO",
-    "observed_min_ago": 2
-  }
+  "ms-config": {
+    "merchant-service": {"status": "degraded", "detail": "stale merchant fields after a config update"}
+  },
+  "all-clear": {}
 }
