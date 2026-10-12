@@ -19,6 +19,9 @@ runs here. The control plane lives at `{HOST}/autograph/{postfix}/v1` (postfix d
 Usage:
   python graphrag_ingest.py          # verify if built; else import+corpus+strategize, then prompt for the UI step
   python graphrag_ingest.py --reset  # drop the project KG collections and rebuild from scratch
+
+Runbook files are resolved relative to the repository root, not the current working directory, so
+the script finds them whether it is run from the repo root or from src/.
 """
 import base64
 import glob
@@ -36,10 +39,14 @@ load_dotenv()
 
 HOST = os.environ["ARANGO_HOST"].rstrip("/")
 GDB = os.environ.get("GRAPHRAG_DB", "incident_demo")
-PROJECT = os.environ.get("GRAPHRAG_PROJECT", "incident-runbook-autograph")
+PROJECT = os.environ.get("GRAPHRAG_PROJECT", "Incidents-Runbook-Autograph")
 U = os.environ["ARANGO_USER"]
 PWD = os.environ["ARANGO_PASSWORD"]
 RUNBOOK_BASE_URL = "https://runbooks.internal"
+# Repo root = the parent of the directory this file lives in (src/..). Used to locate data/runbooks
+# regardless of the current working directory.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RUNBOOK_DIR = os.path.join(REPO_ROOT, "data", "runbooks")
 # AutoGraph KG collections (in the incident_demo database, prefixed by the project name)
 _KG_SUFFIXES = ["Documents", "Chunks", "Entities", "Communities", "Relations",
                 "corpus_relations", "domains", "modules", "rags", "similarities", "sources"]
@@ -103,7 +110,9 @@ def import_runbooks(module="default"):
     jwt = token()
     base = autograph_url(jwt=jwt)
     print(f"autograph: {requests.get(f'{base}/health', headers=_auth(jwt), timeout=20).json()}")
-    files = sorted(glob.glob("data/runbooks/**/*.md", recursive=True))
+    files = sorted(glob.glob(os.path.join(RUNBOOK_DIR, "**", "*.md"), recursive=True))
+    if not files:
+        raise RuntimeError(f"no runbooks found under {RUNBOOK_DIR} (expected data/runbooks/*.md)")
     payload = {
         "module": module,
         "files": [

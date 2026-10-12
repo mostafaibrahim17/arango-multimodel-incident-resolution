@@ -66,8 +66,12 @@ RETURN {
 REASONING_MODEL = "gpt-5-mini"
 
 # Each alert carries a `scenario` naming its incident; health is stored per scenario
-# (keyed `<scenario>__<service>`). If an alert has no scenario, fall back to this one.
-DEFAULT_SCENARIO = "udb-lag"
+# (keyed `<scenario>__<service>`). If an alert has no scenario, fall back to the all-clear snapshot
+# (every service healthy) rather than the hero's udb-lag: inheriting the hero's degraded services
+# would make an unlabeled alert pivot to user-db for no reason. With all-clear the resolver sees no
+# degraded dependency, stays on the alerting service, and reports low confidence -- the honest
+# default when the scenario is unknown.
+DEFAULT_SCENARIO = "all-clear"
 
 REASONING_PROMPT = """You are a senior SRE deciding the true root cause of a production incident.
 
@@ -162,7 +166,7 @@ def reason_rules(payload, alert_text=None):
         confidence = "high" if alerting_health == "degraded" else "medium"
         reasoning = (
             f"{alerting_service} is the alerting service "
-            f"({'degraded' if alerting_health == 'degraded' else 'status unknown'})."
+            f"(status: {alerting_health}); no degraded upstream dependency to pivot to."
         )
     return true_root, reasoning, confidence, "rules"
 
@@ -300,13 +304,18 @@ def reason(payload, alert_text=None, db=None):
         print(f"[reason] LLM judge unavailable ({exc}); using rules fallback", file=sys.stderr)
         true_root, reasoning, judge_confidence, method = reason_rules(payload, alert_text)
 
-    # The traversal computed the on-call owner for the alerting service. If reasoning pivoted to a
-    # different root, re-point the owner at that service's team.
+    # The traversal computed the on-call owner AND the blast radius for the ALERTING service. If
+    # reasoning pivoted to a different root, both must be re-pointed at the decided root: the owner
+    # to that service's team, and the blast radius (impacted_services) to the services that depend
+    # on the decided root -- otherwise the reported blast radius is still the alerting service's,
+    # not the true cause's.
     if db is not None and true_root != payload["root_service"]:
         svc = db.collection("services").get(true_root)
         team = db.collection("teams").get(svc["team"]) if svc and svc.get("team") else None
         if team:
             payload["on_call"] = {"team": team["name"], "contact": team["oncall"]}
+        payload["impacted_services"] = _impacted_for(
+            true_root, payload.get("scenario") or DEFAULT_SCENARIO, db)
 
     payload["root_service"] = true_root
     payload["reasoning"] = reasoning
@@ -316,6 +325,31 @@ def reason(payload, alert_text=None, db=None):
     payload["method"] = method
     payload["verify"] = _verify_command(true_root, db)
     return payload
+
+
+_IMPACTED_AQL = """
+FOR v, e, p IN 1..3 INBOUND CONCAT("services/", @root) GRAPH "service_topology"
+  LET health = DOCUMENT("service_health", CONCAT(@scenario, "__", v._key))
+  COLLECT service = v._key, name = v.name, status = health.status, note = health.note
+    AGGREGATE depth = MIN(LENGTH(p.edges))
+  SORT depth
+  RETURN {service, name, depth, status, note}
+"""
+
+
+def _impacted_for(root, scenario, db):
+    """Recompute the blast radius (INBOUND dependents) for a service, after a root-cause pivot.
+
+    MARQUEE computed impacted_services for the ALERTING service. Once reasoning pivots to a deeper
+    root (e.g. onboarding-api -> user-db), the blast radius must be the dependents of the DECIDED
+    root, so this re-runs the same INBOUND traversal from there. Returns [] on any failure so a
+    pivot never breaks resolution.
+    """
+    try:
+        return list(db.aql.execute(_IMPACTED_AQL, bind_vars={"root": root, "scenario": scenario}))
+    except Exception as exc:
+        print(f"[reason] could not recompute blast radius for {root} ({exc})", file=sys.stderr)
+        return []
 
 
 def _verify_command(service, db=None):
@@ -347,13 +381,15 @@ def resolve_timed(alert, db=None):
     vec = OpenAI().embeddings.create(model=EMBED_MODEL, input=[alert["text"]]).data[0].embedding
     embed_ms = (time.perf_counter() - embed_start) * 1000
 
+    scenario = alert.get("scenario") or DEFAULT_SCENARIO
     query_start = time.perf_counter()
     payload = db.aql.execute(MARQUEE, bind_vars={
         "vec": vec,
         "service": alert.get("service"),
-        "scenario": alert.get("scenario") or DEFAULT_SCENARIO,
+        "scenario": scenario,
     }).next()
     query_ms = (time.perf_counter() - query_start) * 1000
+    payload["scenario"] = scenario  # so a root-cause pivot can recompute the blast radius per-scenario
     payload = reason(payload, alert_text=alert.get("text"), db=db)
     return payload, embed_ms, query_ms
 
@@ -445,7 +481,14 @@ def answer(payload, alert_text=None, jwt=None):
         body = response.json()
         metadata = json.loads(body.get("metadata", "{}"))
         citations = metadata.get("citation_mapping", {}) or {}  # the Retriever's own numbering, kept as-is
+        # Corroboration citations: a SEPARATE retrieval driven by the SYMPTOM ALONE, never naming
+        # the decided service. The answer query above names `service`, so its citations are
+        # steered toward the decision and cannot independently corroborate it. This second query
+        # asks retrieval "given only what the alert reported, which runbook do you surface?" -- a
+        # genuinely independent vote that can disagree with the graph's pick. See corroborated().
+        corroboration_citations = _retrieve_for_symptom(symptom, jwt)
         return {"text": body.get("result", ""), "citations": citations,
+                "corroboration_citations": corroboration_citations,
                 "primary_runbook": primary_runbook, "retriever": "ok"}
     except Exception as exc:  # auth / discovery / query failure -> pinned runbook only
         print(f"[answer] Retriever unavailable ({exc}); returning pinned runbook only",
@@ -454,22 +497,53 @@ def answer(payload, alert_text=None, jwt=None):
         text = (f"Retriever unavailable; grounded on the {service} runbook. "
                 f"Recommended resolution: {snippet}") if snippet else (
                 f"Retriever unavailable; see the {service} runbook.")
-        return {"text": text, "citations": {}, "primary_runbook": primary_runbook,
-                "retriever": "unavailable"}
+        return {"text": text, "citations": {}, "corroboration_citations": {},
+                "primary_runbook": primary_runbook, "retriever": "unavailable"}
+
+
+def _retrieve_for_symptom(symptom, jwt):
+    """Run a SYMPTOM-ONLY retrieval and return its citation mapping, for corroboration.
+
+    This is the independent surface in the corroboration check. It deliberately does NOT mention
+    the decided root service: it asks the Retriever only what the alert itself reported, so the
+    runbook it surfaces is retrieval's own vote, not an echo of the graph's decision. Best-effort:
+    on any failure it returns {} and corroboration reports no agreement rather than raising.
+    """
+    try:
+        query = (f"Incident symptom: {symptom} "
+                 f"Which service's runbook describes this failure and its resolution?")
+        response = requests.post(
+            f"{retriever_url(jwt=jwt)}/graphrag-query",
+            headers={"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"},
+            json={"query": query, "query_type": 3,
+                  "show_citations": True, "include_metadata": True, "use_cache": False},
+            timeout=180,
+        )
+        response.raise_for_status()
+        metadata = json.loads(response.json().get("metadata", "{}"))
+        return metadata.get("citation_mapping", {}) or {}
+    except Exception as exc:
+        print(f"[answer] symptom-only corroboration retrieval unavailable ({exc})", file=sys.stderr)
+        return {}
 
 
 def corroborated(payload, cited):
     """Independent corroboration between the two surfaces.
 
     The structured pipeline chooses a root service from the graph and health. Corroboration asks a
-    separate question: did the Retriever's own semantic retrieval independently surface that
-    service's runbook? The Retriever's citations are not selected by the chosen root (the pinned
-    `primary_runbook` is kept out of this set), so this can genuinely disagree: if retrieval returns
-    only other services' runbooks, or returns nothing, it returns False. That makes it a real check
-    on retrieval, not a restatement of the pick.
+    separate question: given ONLY the alert's symptom, does the Retriever's semantic search surface
+    that same service's runbook? It reads `corroboration_citations` -- the result of a symptom-only
+    retrieval that never names the decided service (see _retrieve_for_symptom) -- NOT the answer's
+    own citations, which were steered by a query naming the root and so would agree by construction.
+
+    Because the two surfaces are now driven by different inputs (graph+health vs. symptom text),
+    this genuinely can disagree: when search alone can't make a multi-hop pivot (e.g. the hero,
+    where the symptom reads like an onboarding/permission issue but the real cause is user-db two
+    hops away), it surfaces a different runbook and corroboration returns False. That is the honest
+    signal -- search and the graph really do disagree there -- not a failure of the check.
     """
     root = payload["root_service"].lower()
-    citations = cited.get("citations", {})
+    citations = cited.get("corroboration_citations", {})
     services = [_citation_service(c) for c in citations.values()]
     match = next((s for s in services if s == root or (s and root in s)), None)
     agree = match is not None

@@ -13,11 +13,10 @@ step then decides the true root cause, pivoting from the alerting service to a d
 dependency when the health and symptom support it, and the AutoGraph knowledge graph grounds a
 natural-language fix in that service's runbook.
 
-Across the 9 demo alerts the agent names the correct root cause for each, scored against a
+Across the 10 demo alerts the agent names the correct root cause for each, scored against a
 per-alert answer key rather than a self-check that always passes. The confidence it reports is
-derived from the graph evidence and spans three tiers (high, medium, low). It is the
-support-engineering use case Zscaler runs in production at scale (40K+ daily AI requests on the
-same platform); here it is simulated end to end on a public dataset you can run yourself.
+derived from the graph evidence and spans three tiers (high, medium, low). Here it is simulated
+end to end on a public dataset you can run yourself.
 
 ## Contents
 - [How it works](#how-it-works)
@@ -30,6 +29,7 @@ same platform); here it is simulated end to end on a public dataset you can run 
 - [Setup](#setup)
 - [Running the pipeline](#running-the-pipeline)
 - [Models](#models)
+- [Tests](#tests)
 - [Status](#status)
 - [Attribution](#attribution)
 
@@ -62,19 +62,20 @@ JSON payload:
 - **`structured`** (one AQL round trip, then the reasoning step):
   - `similar_incidents`: 3 ranked past incidents with their resolutions (vector, [`APPROX_NEAR_COSINE`](https://docs.arango.ai/arangodb/stable/aql/functions/vector/))
   - `possible_causes`: the services the alerting service depends on, by depth, each with its health status (graph, `OUTBOUND` traversal) — this is where a cause can live
-  - `impacted_services`: the services that depend on the alerting service (graph, `INBOUND` traversal) — the blast radius
+  - `impacted_services`: the services that depend on the decided root cause (graph, `INBOUND` traversal) — the blast radius, recomputed for the decided root after a pivot
   - `root_service`, `reasoning`, `confidence`, `judge_confidence`, `confidence_basis`: the decided root cause and why, with a confidence derived from the graph (the model's own self-report is kept separately and can only lower the tier, never raise it)
   - `on_call`: the owning team and contact (key-value, `DOCUMENT` lookup)
 - **`cited_answer`**: a natural-language next step from the Retriever, with its own citations under
   the Retriever's numbering, plus `primary_runbook`: the exact runbook for the decided root
   service, read from the knowledge-graph store.
-- **`corroboration`**: an independent check that the Retriever's own retrieval surfaced the
-  decided root service's runbook, so the structured surface and the semantic surface agree. It is
-  not derived from the pick, so it can disagree.
+- **`corroboration`**: an independent check (see [Results](#results)) that a **symptom-only**
+  retrieval — one that never names the decided service — surfaces that service's runbook. Because
+  the two surfaces are driven by different inputs, this can genuinely disagree.
 
-The cause-side subgraph shows the decided root cause in red and any degraded dependency in amber,
-so a pivot is visible: on the hero alert the alarm is on `onboarding-api`, but the root cause is
-`user-db` two hops away.
+On the hero alert the alarm is on `onboarding-api`, but the single degraded dependency in the
+chain is `user-db`, two hops away, so the agent pivots the root cause there. The cause-side
+subgraph shows the decided root in red and any degraded dependency in amber, so the pivot is
+visible.
 
 ![Cause-side dependency subgraph for the onboarding-api alert, decided root in red, degraded dependency in amber](assets/affected-subgraph.png)
 
@@ -100,18 +101,38 @@ One store, one language, several moves in one round trip (`src/resolver.py:MARQU
 
 ## Results
 
-Every alert in `data/alerts.json`, end to end. Section 7 of the notebook runs `evaluate()` over
-the whole set and times both halves of each resolution: the multimodel query (one AQL round trip)
-and the cited answer from the Retriever.
+Every alert in `data/alerts.json`, end to end. Section 7 of the notebook (and `src/run_cascade.py`)
+runs `evaluate()` over the whole set and times both halves of each resolution: the multimodel
+query (one AQL round trip) and the cited answer from the Retriever.
 
-![Results: per-alert multimodel-query latency, colored by whether the decided root cause was correct across the 9 alerts](assets/results.png)
+![Results: per-alert multimodel-query latency, colored by whether the decided root cause was correct across the 10 alerts](assets/results.png)
 
-For every alert the agent names the correct root cause, scored against a per-alert `expected_root`
-answer key, so the score can actually fail (changing a key to a wrong value drops it). A runbook
-is located for the decided root (`runbook_found`), and the Retriever's own retrieval independently
-corroborates it. The multimodel query itself returns in a few milliseconds; the cited answer adds
-one Retriever round trip on top. The per-alert table (similar incident, possible causes, blast
-radius, on-call owner, runbook, confidence, both timings) renders in the notebook.
+For every alert the agent names the correct root cause (**10/10**), scored against a per-alert
+`expected_root` answer key, so the score can actually fail — changing a key to a wrong value drops
+it. A runbook is located for the decided root (`runbook_found`, 10/10).
+
+**Corroboration is an independent signal, not a rubber stamp.** It runs a second, symptom-only
+retrieval that never names the decided service, and checks whether that retrieval surfaces the
+same service's runbook. On this set it agrees on **7 of 10**. The three it does *not* corroborate
+are exactly the `udb-lag` pivots (the hero `ALR-001`, plus `ALR-003` and `ALR-008`): a plain
+semantic search over the symptom text cannot make the two-hop jump from an onboarding/auth
+symptom to `user-db`, which only the dependency graph and health make, so retrieval honestly
+surfaces a different runbook. That disagreement is the check working, not failing — the old
+always-true corroboration could never produce it.
+
+**Confidence spans all three tiers, derived from the graph:** high when the decided root is the
+only degraded service in the chain (8 alerts), medium when two services are genuinely degraded and
+the pick is plausible rather than decisive (`ALR-010`, where `auth-service` and its own dependency
+`user-db` are both degraded on the login path), and low when nothing in the chain is degraded
+(`ALR-009`). The model's self-reported confidence is kept separately and can only lower a tier,
+never raise it, so the hero can report medium in a run where the judge is itself unsure even though
+the graph evidence alone would be high.
+
+The multimodel query itself returns in roughly 100 ms. The cited answer adds the Retriever round
+trips on top (the grounded answer plus the separate symptom-only corroboration retrieval), which
+dominate end-to-end time at a few seconds per alert. The per-alert table (similar incident,
+possible causes, blast radius, on-call owner, runbook, confidence, both timings) renders in the
+notebook.
 
 ## Repository layout
 
@@ -126,6 +147,7 @@ radius, on-call owner, runbook, confidence, both timings) renders in the noteboo
 │   ├── graphrag.py                  # auth + service discovery + the KG runbook lookup
 │   ├── graphrag_ingest.py           # build the runbook KG with AutoGraph (import -> corpus build -> strategizer -> orchestrate) + verify
 │   ├── resolver.py                  # the marquee AQL query + reasoning/pivot + cited grounded answer + corroboration + evaluate()
+│   ├── run_cascade.py               # the hero + full sweep in one command; regenerates assets/results.png
 │   ├── run_all.py                   # the whole pipeline in one command (verify-only by default)
 │   └── viz.py                       # regenerate the figures from live data (subgraph, KG, results)
 │
@@ -133,11 +155,12 @@ radius, on-call owner, runbook, confidence, both timings) renders in the noteboo
 │   ├── topology.json                # curated service topology (12 services, 13 dependencies, 5 teams)
 │   ├── service_signals.json         # per-scenario service health (which services are degraded in each incident scenario)
 │   ├── seed_incidents.json          # 47 curated past incidents that relate to the scenarios
-│   ├── alerts.json                  # 9 synthetic alerts; alert.sample.json is the headline P1
+│   ├── alerts.json                  # 10 synthetic alerts; alert.sample.json is the headline P1
 │   └── runbooks/                    # 11 hand-authored runbooks (the cited knowledge-graph corpus)
 │
 ├── docs/                            # provisioning walkthrough for the AutoGraph services
-├── tests/                           # unit tests for the reasoning / scoring / citation logic
+├── tests/                           # offline unit tests for the reasoning / scoring / citation logic (pytest)
+├── check_*.py                       # manual end-to-end checks (need a live deployment); see Tests
 └── assets/                          # architecture diagram + the data-driven figures
 ```
 
@@ -147,8 +170,8 @@ radius, on-call owner, runbook, confidence, both timings) renders in the noteboo
 |---|---|---|
 | Incident tickets | [`6StringNinja/synthetic-servicenow-incidents`](https://huggingface.co/datasets/6StringNinja/synthetic-servicenow-incidents) (HF, MIT, 500 rows) | Loaded at runtime, not vendored. Embeds `short_description + description`; keeps `resolution`. Background volume; unmatched rows are labelled `unknown`, not a real service. |
 | Seed incidents | `data/seed_incidents.json` (47 curated) | Past incidents that actually relate to the scenarios, so similarity recall has real signal, not only noise. Includes the user-db / e-sign cases behind the hero alert. |
-| Per-scenario health | `data/service_signals.json` | Which services are degraded in each incident scenario. One scenario degrades two services (a true cause and a decoy); one degrades none (the low-confidence case). |
-| Live alerts | `data/alerts.json` (9 synthetic) | Varied service, severity, region, telemetry. Each carries a `scenario` and an `expected_root` answer key. |
+| Per-scenario health | `data/service_signals.json` | Which services are degraded in each incident scenario. The hero scenario (`udb-lag`) degrades a single service two hops down; `auth-degraded` degrades two genuine suspects on one chain (the medium-confidence case); `all-clear` degrades none (the low-confidence case). |
+| Live alerts | `data/alerts.json` (10 synthetic) | Varied service, severity, region, telemetry. Each carries a `scenario` and an `expected_root` answer key. |
 | Runbooks | `data/runbooks/` (11 hand-authored, by service-family module) | The cited source-of-truth knowledge graph. |
 
 The data is a **simulation** of an incident estate (breadth across P1 to P3 and across infra to
@@ -182,13 +205,17 @@ ARANGO_USER=<user>
 ARANGO_PASSWORD=<password>
 OPENAI_API_KEY=<your-key>
 GRAPHRAG_DB=incident_demo
-GRAPHRAG_PROJECT=incident-runbook-autograph
+GRAPHRAG_PROJECT=Incidents-Runbook-Autograph
 ```
 
 `GRAPHRAG_DB` and `GRAPHRAG_PROJECT` point at the AutoGraph project whose knowledge-graph
-collections live in the same database as the multimodel core. `src/graphrag.py` and
-`src/graphrag_ingest.py` use the same default project name, and the Retriever and AutoGraph
-service postfixes are discovered at runtime (`src/graphrag.py`), so no service IDs are hardcoded.
+collections live in the same database as the multimodel core. **The value of `GRAPHRAG_PROJECT`
+must match your deployed AutoGraph project name exactly — same spelling and case** — because the
+code derives collection names from it (`{GRAPHRAG_PROJECT}_sources`, `{GRAPHRAG_PROJECT}_Entities`,
+…) and ArangoDB collection names are case-sensitive; a mismatch silently finds no runbooks rather
+than erroring. `src/graphrag.py` and `src/graphrag_ingest.py` carry the same default, and the
+Retriever and AutoGraph service postfixes are discovered at runtime, so no service IDs are
+hardcoded.
 
 > On Apple Silicon, run the scripts with `arch -arm64 python3 ...` (the Python here is a universal
 > binary).
@@ -201,8 +228,11 @@ the resolver run from the scripts (or the notebook). In order:
 **1. Build the multimodel core.**
 
 ```bash
-python src/ingest.py   # 500 incidents + 47 seeds + 9 alerts + topology + per-scenario health in incident_demo
+python src/ingest.py   # 500 incidents + 47 seeds + 10 alerts + topology + per-scenario health in incident_demo
 ```
+
+`ingest.py` is skip-if-loaded: if the store already holds incidents it does nothing, so a rerun
+costs no re-embedding. Pass `--reset` to drop and reload (needed after you change any data file).
 
 **2. Build the runbook knowledge graph (AutoGraph web UI).** Create an AutoGraph project through
 the wizard (Documents, Configure, Build): upload the 11 runbooks in `data/runbooks/` as a
@@ -220,15 +250,16 @@ must be done with the UI's **Continue to build** button. The wizard is the path 
 follows.
 
 **3. Deploy a Retriever.** Once the Knowledge Graph exists, deploy a Retriever from the project
-overview (**Deploy a retriever**). The resolver queries it for the cited answer. If it is not
-running, the resolver still returns the decided root cause and that service's runbook, and marks
-the result degraded rather than failing.
+overview (**Deploy a retriever**). The resolver queries it for the cited answer and for the
+symptom-only corroboration retrieval. If it is not running, the resolver still returns the decided
+root cause and that service's runbook, and marks the result degraded rather than failing.
 
 **4. Resolve an alert.**
 
 ```bash
 python src/resolver.py data/alert.sample.json   # one alert -> structured payload + cited, grounded answer
-python src/run_all.py                           # or the whole pipeline (verify stores, then resolve)
+python src/run_cascade.py                        # the hero + the full 10-alert sweep, regenerates assets/results.png
+python src/run_all.py                            # or the whole pipeline (verify stores, then resolve)
 ```
 
 `run_all.py` is verify-only by default: it does not rebuild the operational store or re-import the
@@ -246,16 +277,35 @@ ingest and query sides, so the vector spaces match. The agent's reasoning uses `
 confidence is derived from the graph, so the tier is stable even when the model's self-report
 varies.
 
+## Tests
+
+Offline unit tests cover the pure logic that carried the reviewed bugs — the root-cause pivot,
+the corroboration agree/disagree check, citation parsing, confidence derivation, the
+service-appropriate verify command, and answer-key scoring. They touch no external service:
+
+```bash
+pytest tests/ -v
+```
+
+The `check_*.py` scripts at the repo root are manual end-to-end checks that **do** require a live
+deployment (ArangoDB + OpenAI, and for some the Retriever). They are committed so the verification
+is visible, but are not part of the `pytest` run:
+
+- `check_corroboration.py` — corroboration agrees for the real root and disagrees for a root the symptom-only retrieval did not surface.
+- `check_rules_fallback.py` — with the LLM judge forced off, the deterministic fallback still resolves the hero correctly.
+- `check_retriever_fallback.py` — a Retriever/auth outage degrades to the pinned runbook instead of crashing.
+- `check_alr010_stripnote.py` — the medium case (`ALR-010`) still picks `auth-service` with the health notes stripped of symptom words, proving the pick is structural, not keyword-driven.
+
 ## Status
 
 - Multimodel core ✅ — incidents, seeds, per-scenario health, topology, alerts.
 - AutoGraph runbook knowledge graph ✅ — import, corpus build, and strategizer run via the
   AutoGraph REST API; the Knowledge Graph is built from the project overview in the UI.
 - Reasoning + cited, grounded resolver ✅ — pivots to the true root cause using per-scenario
-  health; the cited fix is grounded in that service's runbook; across the 9 demo alerts the agent
-  names the correct root cause (scored against an answer key), and the Retriever's retrieval
-  independently corroborates each one.
-- Tests ✅ — unit tests for the reasoning, scoring, and citation logic in `tests/`.
+  health; the cited fix is grounded in that service's runbook; across the 10 demo alerts the agent
+  names the correct root cause (scored against an answer key), and a symptom-only retrieval
+  independently corroborates 7 of them (the three `udb-lag` pivots are the honest disagreements).
+- Tests ✅ — offline unit tests in `tests/` (pytest) plus committed manual end-to-end checks.
 
 ## Attribution
 

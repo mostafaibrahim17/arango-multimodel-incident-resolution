@@ -34,7 +34,7 @@ def main():
 
     print("== 1. Multimodel core (incidents + alerts + topology) ==")
     if rebuild or not _operational_store_ready():
-        ingest.main()
+        ingest.main(reset=rebuild)
     else:
         print("operational store already built (skip; pass --rebuild to reload it).")
 

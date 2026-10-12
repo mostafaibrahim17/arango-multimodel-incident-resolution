@@ -136,11 +136,12 @@ def test_fallback_without_symptom_takes_shallowest():
 
 # ---------------------------------------------------------------------------
 # corroborated  --  must be able to return False (the whole point of the fix)
+# Reads `corroboration_citations`: the SYMPTOM-ONLY retrieval, independent of the decided root.
 # ---------------------------------------------------------------------------
 
 def test_corroboration_agrees_when_runbook_matches_root():
     payload = make_payload("user-db", [("user-db", 0, "degraded")])
-    cited = {"citations": {"1": runbook("user-db")}}
+    cited = {"corroboration_citations": {"1": runbook("user-db")}}
     result = resolver.corroborated(payload, cited)
     assert result["agree"] is True
     assert result["runbook_service"] == "user-db"
@@ -149,7 +150,7 @@ def test_corroboration_agrees_when_runbook_matches_root():
 def test_corroboration_FAILS_when_runbook_is_for_a_different_service():
     """The critical regression guard: pick user-db but cite document-service -> disagree."""
     payload = make_payload("user-db", [("user-db", 0, "degraded")])
-    cited = {"citations": {"1": runbook("document-service")}}
+    cited = {"corroboration_citations": {"1": runbook("document-service")}}
     result = resolver.corroborated(payload, cited)
     assert result["agree"] is False
     assert result["runbook_service"] == "document-service"
@@ -158,7 +159,7 @@ def test_corroboration_FAILS_when_runbook_is_for_a_different_service():
 
 def test_corroboration_fails_with_no_citation():
     payload = make_payload("user-db", [("user-db", 0, "degraded")])
-    cited = {"citations": {}}
+    cited = {"corroboration_citations": {}}
     result = resolver.corroborated(payload, cited)
     assert result["agree"] is False
 

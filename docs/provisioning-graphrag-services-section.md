@@ -177,13 +177,13 @@ curl -s -X GET "$EP/_platform/acp/v1/service/$SERVICE_ID" \
 ```json
 {
   "serviceInfo": {
-    "serviceId": "arangodb-autograph-auxwm",
+    "serviceId": "arangodb-graphrag-retriever-bmtya",
     "description": "Install complete",
     "status": "DEPLOYED",
     "namespace": "arangodb-platform-rnd-<deployment>",
     "dbName": "incident_demo",
     "managingEntity": "ACP",
-    "genaiProjectName": "Incidents-runbook-autograph"
+    "genaiProjectName": "Incidents-Runbook-Autograph"
   }
 }
 ```

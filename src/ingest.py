@@ -11,6 +11,7 @@ services are degraded, so an alert is resolved against the health state of its o
 """
 import json
 import os
+import sys
 
 from arango import ArangoClient
 from datasets import load_dataset
@@ -47,8 +48,24 @@ def embed(client, texts, batch=100):
     return out
 
 
-def main():
+def store_ready(db=None):
+    """True when the operational store already holds the incident corpus, so a reload is not needed."""
+    db = db or connect()
+    return db.has_collection("incidents") and db.collection("incidents").count() > 0
+
+
+def main(reset=None):
+    # By default, skip the whole load if the store is already populated: dropping and re-embedding
+    # all ~500 tickets on every run is slow and costs OpenAI calls for no change. Pass --reset (CLI)
+    # or reset=True (notebook) to force a clean rebuild. reset defaults to the CLI flag.
+    if reset is None:
+        reset = "--reset" in sys.argv
     db = connect()
+    if store_ready(db) and not reset:
+        print(f"operational store already loaded ({db.collection('incidents').count()} incidents); "
+              f"skip (pass --reset to reload).")
+        return
+
     topo = json.load(open("data/topology.json"))
 
     # Drop and recreate the collections and graph so the script is idempotent:
