@@ -6,5 +6,7 @@ __pycache__/
 runlog/
 # Superseded cleared notebook copy — one executed notebook ships; kept locally, excluded from the repo
 incident_resolution.colab.ipynb
-
 .DS_Store
+
+# Python virtual environment
+.venv/

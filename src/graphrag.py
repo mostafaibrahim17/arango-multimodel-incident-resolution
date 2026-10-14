@@ -16,7 +16,7 @@ HOST = os.environ["ARANGO_HOST"].rstrip("/")  # gateway base, e.g. https://your-
 USER = os.environ["ARANGO_USER"]
 PWD = os.environ["ARANGO_PASSWORD"]
 GRAPHRAG_DB = os.environ.get("GRAPHRAG_DB", "incident_demo")
-GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "incidents-runbook-autograph")
+GRAPHRAG_PROJECT = os.environ.get("GRAPHRAG_PROJECT", "Incidents-Runbook-Autograph")
 
 
 def kg_db():
@@ -34,8 +34,11 @@ def runbook_for_service(svc):
     the right body and a clean runbook name. This pins the answer to the exact runbook for the root
     service the multimodel query identified, instead of relying on semantic retrieval alone.
     """
+    # SORT d.filename before LIMIT 1 so the pick is deterministic when several sources match the
+    # header (without a SORT, AQL's LIMIT returns an arbitrary matching row that can vary run to run).
     q = (f"FOR d IN `{GRAPHRAG_PROJECT}_sources` "
          "FILTER CONTAINS(LOWER(d.content), CONCAT('**service:** ', @svc)) "
+         "SORT d.filename "
          "LIMIT 1 RETURN {file_name: d.filename, content: d.content}")
     rows = list(kg_db().aql.execute(q, bind_vars={"svc": svc.lower()}))
     return rows[0] if rows else None
