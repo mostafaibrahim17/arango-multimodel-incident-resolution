@@ -160,7 +160,8 @@ notebook.
 │
 ├── docs/                            # provisioning walkthrough for the AutoGraph services
 ├── tests/                           # offline unit tests for the reasoning / scoring / citation logic (pytest)
-├── check_*.py                       # manual end-to-end checks (need a live deployment); see Tests
+├── check_all_creds.py               # run first: checks Arango + OpenAI credentials from .env; see Setup
+├── check_*.py                       # the other check_ scripts: manual end-to-end checks (need a live deployment); see Tests
 └── assets/                          # architecture diagram + the data-driven figures
 ```
 
@@ -216,6 +217,16 @@ code derives collection names from it (`{GRAPHRAG_PROJECT}_sources`, `{GRAPHRAG_
 than erroring. `src/graphrag.py` and `src/graphrag_ingest.py` carry the same default, and the
 Retriever and AutoGraph service postfixes are discovered at runtime, so no service IDs are
 hardcoded.
+
+Then test the credentials before running anything else:
+
+```bash
+python check_all_creds.py   # Arango login + OpenAI key, embedding and reasoning models
+```
+
+It exits non-zero with a readable message if either fails. It does not check `ARANGO_DB` or
+the `GRAPHRAG_*` values, so a wrong `GRAPHRAG_PROJECT` still fails silently as described above.
+If something breaks later in the pipeline, run this first.
 
 > On Apple Silicon, run the scripts with `arch -arm64 python3 ...` (the Python here is a universal
 > binary).
@@ -287,9 +298,9 @@ service-appropriate verify command, and answer-key scoring. They touch no extern
 pytest tests/ -v
 ```
 
-The `check_*.py` scripts at the repo root are manual end-to-end checks that **do** require a live
-deployment (ArangoDB + OpenAI, and for some the Retriever). They are committed so the verification
-is visible, but are not part of the `pytest` run:
+The `check_*.py` scripts at the repo root (apart from `check_all_creds.py`, the credential check
+from [Setup](#setup)) are manual end-to-end checks that **do** require a live deployment
+(ArangoDB + OpenAI, and for some the Retriever). They are committed so the verification is visible, but are not part of the `pytest` run:
 
 - `check_corroboration.py` — corroboration agrees for the real root and disagrees for a root the symptom-only retrieval did not surface.
 - `check_rules_fallback.py` — with the LLM judge forced off, the deterministic fallback still resolves the hero correctly.
